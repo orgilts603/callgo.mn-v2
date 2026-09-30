@@ -38,7 +38,7 @@ Coefficient 1: a *leading* 1 is dropped before зуу and мянга (100 "зу�
 Ordinals: the suffix is ``-дугаар`` after a back-vowel stem and ``-дүгээр``
 after a front-vowel stem. Harmony is decided by the last non-neutral vowel of
 the (possibly truncated) stem: back = а о у я ё ю ы, front = э ө ү е,
-neutral = и. Stems: зургаа→зурга, долоо→долд, all others unchanged
+neutral = и. Stems: зургаа→зурга, долоо→дол, all others unchanged
 (3 гуравдугаар, 5 тавдугаар, 9 есдүгээр, 1 нэгдүгээр, 6 зургадугаар,
 7 долдугаар, 20 хорьдугаар).
 
@@ -68,7 +68,7 @@ MAX_WORDED = 10**12 - 1
 _BACK = set("аоуяёюы")
 _FRONT = set("эөүе")
 
-_ORDINAL_STEM = {"зургаа": "зурга", "долоо": "долд"}
+_ORDINAL_STEM = {"зургаа": "зурга", "долоо": "дол"}
 
 
 def _unit(u: int) -> _Tok:
@@ -179,7 +179,7 @@ def decimal_to_words(integer: str, frac: str, attributive: bool = False) -> str:
 
 
 def _clean_int(s: str) -> str:
-    return re.sub(r"[,  ' ]", "", s)
+    return re.sub(r"[,\u00a0\u202f' ]", "", s)
 
 
 def _read_int(s: str, attributive: bool) -> str:
@@ -200,7 +200,7 @@ def read_number(token: str, attributive: bool = False) -> str:
 # ---------------------------------------------------------------------------
 # text-level expansion
 
-_GROUPED_COMMA = r"[0-9]{1,3}(?:[,  '][0-9]{3})+"
+_GROUPED_COMMA = r"[0-9]{1,3}(?:[,\u00a0\u202f'][0-9]{3})+"
 _GROUPED_SPACE = r"[0-9]{1,3}(?: [0-9]{3})+"
 NUM = rf"(?:{_GROUPED_COMMA}|{_GROUPED_SPACE}|[0-9]+)"
 

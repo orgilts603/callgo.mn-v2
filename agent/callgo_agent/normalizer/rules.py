@@ -53,14 +53,10 @@ def apply_rules(text: str, rules: list[Rule]) -> str:
     return text
 
 
-def _clean(s: str) -> str:
-    return re.sub(r"[,  ' ]", "", s)
-
-
 # ---------------------------------------------------------------------------
 # unicode / markdown / emoji
 
-_ZERO_WIDTH = "​‌‍⁠﻿️︎"
+_ZERO_WIDTH = "\u200b\u200c\u200d\u2060\ufeff\ufe0f\ufe0e"
 
 
 def _unicode(m: re.Match[str]) -> str:
@@ -221,14 +217,26 @@ def _date_md(m: re.Match[str]) -> str:
     return _date_words(None, mo, d) if _valid_md(mo, d) else m.group(0)
 
 
+_MIN_SUFFIX = {"т": "ад", "ийн": "ын", "аас": "аас", "ийг": "ыг"}
+
+
 def _time(m: re.Match[str]) -> str:
     h, mi, se = int(m.group(1)), int(m.group(2)), m.group(3)
-    parts = [number_to_words(h, True) + " цаг"]
-    if mi or se:
-        if mi:
-            parts.append(number_to_words(mi, True) + " минут")
-        if se and int(se):
-            parts.append(number_to_words(int(se), True) + " секунд")
+    has_word, suf = m.group(4) is not None, m.group(5) or ""
+    hour = number_to_words(h, True) + " цаг"
+    parts = [hour]
+    if mi:
+        parts.append(number_to_words(mi, True) + " минут")
+    if se and int(se):
+        parts.append(number_to_words(int(se), True) + " секунд")
+    if has_word:
+        # "14:00 цагт" -> "арван дөрвөн цагт"; "14:30 цагт" -> "... гучин минутад"
+        if len(parts) == 1:
+            parts[0] += suf
+        elif parts[-1].endswith("минут"):
+            parts[-1] += _MIN_SUFFIX[suf] if suf else ""
+        else:
+            parts[-1] += suf
     return f" {' '.join(parts)} "
 
 
@@ -295,7 +303,7 @@ def _phone(m: re.Match[str]) -> str:
         if digits.startswith("976") and len(digits) > 8:
             prefix += digits_to_words("976") + ", "
             digits = digits[3:]
-    return f" {prefix}{_phone_groups(digits)}, "
+    return f" {prefix}{_phone_groups(digits)} "
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +352,8 @@ TTS_RULES: list[Rule] = [
     _r("range", r"(?<=[0-9])(?:-|\s*[–—]\s*)(?=[0-9])", ", "),
     _r(
         "time",
-        r"(?<![0-9:])([01]?[0-9]|2[0-3]):([0-5][0-9])(?::([0-5][0-9]))?(?![0-9:])",
+        r"(?<![0-9:])([01]?[0-9]|2[0-3]):([0-5][0-9])(?::([0-5][0-9]))?(?![0-9:])"
+        r"(\s+цаг(т|ийн|аас|ийг)?(?![\w]))?",
         _time,
     ),
     # -- money / percent / shorthand ---------------------------------------

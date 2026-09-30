@@ -14,7 +14,7 @@ var (
 	busyRe = regexp.MustCompile(`\bbusy\b|\b486\b|\b600\b|\b603\b|declin|reject`)
 	// SIP 408 Request Timeout, 480 Temporarily Unavailable, 487 Request
 	// Terminated (ring timeout), livekit-sip "sip request timed out".
-	noAnswerRe = regexp.MustCompile(`no[ _-]?answer|not answered|timed out|timeout|deadline exceeded|\b408\b|\b480\b|\b487\b|unavailable`)
+	noAnswerRe = regexp.MustCompile(`no[ _-]?answer|not answered|timed out|timeout|deadline exceeded|\b408\b|\b480\b|\b487\b|temporarily unavailable`)
 )
 
 // classify maps an unanswered dial result to a terminal call status:

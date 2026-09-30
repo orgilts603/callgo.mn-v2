@@ -48,8 +48,8 @@ def _shouting(m: re.Match[str]) -> str:
 
 
 STT_RULES: list[Rule] = [
-    Rule("unicode", re.compile(r"[​-‍⁠﻿]"), lambda _m: ""),
-    Rule("nbsp", re.compile(r"[  ]"), lambda _m: " "),
+    Rule("unicode", re.compile(r"[\u200b-\u200d\u2060\ufeff]"), lambda _m: ""),
+    Rule("nbsp", re.compile(r"[\u00a0\u202f]"), lambda _m: " "),
     Rule("stray_symbols", re.compile(r"[*#~^_|\\<>{}\[\]=`\"“”«»„]"), lambda _m: " "),
     Rule("collapse_ws", re.compile(r"\s+"), lambda _m: " "),
     Rule("lookalikes", _TOKEN, _fix_lookalikes),
@@ -68,6 +68,7 @@ STT_RULES: list[Rule] = [
         lambda _m: ". ",
     ),
     Rule("leading_punct", re.compile(r"\A[\s,;:.\-]+"), lambda _m: ""),
+    Rule("trailing_pause", re.compile(r"[\s,;:]+\Z"), lambda _m: ""),
     Rule("trim", re.compile(r"(?s)\A\s+|\s+\Z"), lambda _m: ""),
 ]
 

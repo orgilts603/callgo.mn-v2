@@ -394,7 +394,6 @@ class PiperChunkedStream(tts.ChunkedStream):
 
         text = self._input_text
         if not text.strip():
-            output_emitter.flush()
             return
 
         try:
@@ -445,4 +444,5 @@ class PiperChunkedStream(tts.ChunkedStream):
             # text with nothing pronounceable (e.g. only punctuation): emit a short
             # silence rather than failing the turn with "no audio frames were pushed".
             output_emitter.push(np.zeros(sample_rate // 20, dtype=np.int16).tobytes())
-        output_emitter.flush()
+        # no trailing flush(): ChunkedStream calls end_input(), which sends the held-back
+        # tail as the is_final frame (a flush here would add a 10 ms marker frame).

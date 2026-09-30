@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 import numpy as np
 from livekit import rtc
-from livekit.agents import APIError, stt, utils
+from livekit.agents import stt, utils
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -52,6 +52,14 @@ DEFAULT_TEMPERATURES: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
 """faster-whisper's default temperature fallback schedule (guards against repetition loops)."""
 
 _AUTO_LANGUAGES = frozenset({"", "auto", "detect"})
+
+
+class WhisperSTTError(RuntimeError):
+    """Local model load / decode failure.
+
+    Deliberately *not* an ``APIError``: ``STT.recognize`` retries every ``APIError``
+    (ignoring ``retryable``), which is pointless for a missing model file.
+    """
 
 
 class _Segment(Protocol):
@@ -455,11 +463,10 @@ class WhisperSTT(stt.STT):
             model = await self.ensure_model()
         except Exception as e:
             # a missing / corrupt model will not fix itself on retry
-            raise APIError(
-                f"failed to load faster-whisper model {self._opts.model!r}: {e}",
-                retryable=False,
+            raise WhisperSTTError(
+                f"failed to load faster-whisper model {self._opts.model!r}: {e}"
             ) from e
         try:
             return await asyncio.to_thread(self._transcribe_sync, model, buffer, lang)
         except Exception as e:
-            raise APIError(f"faster-whisper transcription failed: {e}", retryable=False) from e
+            raise WhisperSTTError(f"faster-whisper transcription failed: {e}") from e
