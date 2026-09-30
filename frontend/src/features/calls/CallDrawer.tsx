@@ -28,15 +28,15 @@ function CallHeader({ call, contact, events }: { call?: Call; contact?: Contact 
   const contactName = contact?.name
   return (
     <div className="min-w-0 space-y-1">
-      <div className="flex flex-wrap items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2 overflow-hidden">
         <DirectionIcon direction={call.direction} />
-        <span className="flex items-center gap-1.5 truncate text-sm font-semibold text-[var(--fg)]">
+        <span className="flex shrink-0 items-center gap-1.5 text-sm font-semibold text-[var(--fg)]">
           {fmtPhone(call.fromNumber)} <ArrowRight className="h-3.5 w-3.5 text-[var(--fg-subtle)]" /> {fmtPhone(call.toNumber)}
         </span>
         <CallStatusBadge status={call.status} />
         {live && events.agentState && <AgentStateBadge state={events.agentState} />}
       </div>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[var(--fg-muted)]">
+      <div className="flex min-w-0 items-center gap-x-3 overflow-hidden whitespace-nowrap text-xs text-[var(--fg-muted)]">
         {contactName && <span className="inline-flex items-center gap-1"><User className="h-3 w-3" />{contactName}</span>}
         <span className="inline-flex items-center gap-1" title={fmtDateTime(call.startedAt)}>
           <Clock className="h-3 w-3" /><CallDuration call={call} />
@@ -46,7 +46,7 @@ function CallHeader({ call, contact, events }: { call?: Call; contact?: Contact 
             <Megaphone className="h-3 w-3" />{campaignNames.get(call.campaignId) ?? 'Кампанит ажил'}
           </Link>
         )}
-        <span className="text-[var(--fg-subtle)]">{fmtDateTime(call.startedAt)}</span>
+        <span className="hidden text-[var(--fg-subtle)] sm:inline">{fmtDateTime(call.startedAt)}</span>
       </div>
     </div>
   )
