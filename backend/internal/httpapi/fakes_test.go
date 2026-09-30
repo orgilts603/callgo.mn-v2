@@ -2,8 +2,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/csv"
-	"errors"
 	"io"
 	"net/http"
 	"slices"
@@ -14,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/orgilts603/callgo.mn-v2/backend/internal/csvimport"
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/domain"
 )
 
@@ -632,6 +631,12 @@ func (f *fakeDB) UpdateTarget(_ context.Context, t *domain.CampaignTarget) error
 
 func (f *fakeDB) CountActiveTargets(context.Context, uuid.UUID) (int, error) { return 0, nil }
 
+func (f *fakeDB) ListAllTargets(_ context.Context, campaignID uuid.UUID) ([]domain.CampaignTarget, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.targets[campaignID]), nil
+}
+
 func (f *fakeDB) DeleteCampaign(_ context.Context, id uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -796,9 +801,12 @@ func (h *fakeHub) ServeWS(w http.ResponseWriter, r *http.Request, orgID uuid.UUI
 }
 
 type fakeCampaigns struct {
-	db    *fakeDB
-	mu    sync.Mutex
-	ended []uuid.UUID
+	db     *fakeDB
+	mu     sync.Mutex
+	ended  []uuid.UUID
+	starts []int // dryRunLimit of every Start
+	// endedCalls snapshots the calls passed to OnCallEnded.
+	endedCalls []domain.Call
 }
 
 func (c *fakeCampaigns) setStatus(ctx context.Context, id uuid.UUID, st domain.CampaignStatus) error {
@@ -810,7 +818,10 @@ func (c *fakeCampaigns) setStatus(ctx context.Context, id uuid.UUID, st domain.C
 	return c.db.UpdateCampaign(ctx, camp)
 }
 
-func (c *fakeCampaigns) Start(ctx context.Context, id uuid.UUID) error {
+func (c *fakeCampaigns) Start(ctx context.Context, id uuid.UUID, dryRunLimit int) error {
+	c.mu.Lock()
+	c.starts = append(c.starts, dryRunLimit)
+	c.mu.Unlock()
 	return c.setStatus(ctx, id, domain.CampaignRunning)
 }
 
@@ -822,66 +833,146 @@ func (c *fakeCampaigns) OnCallEnded(_ context.Context, call *domain.Call) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.ended = append(c.ended, call.ID)
+	c.endedCalls = append(c.endedCalls, *call)
 }
 
-// csvParser implements TargetParser and ContactParser with a minimal CSV reader.
-type csvParser struct{}
+// listParser adapts internal/csvimport (CSV + Excel) to the parser
+// interfaces, the same way cmd/server does.
+type listParser struct{}
 
-func readCSV(r io.Reader) ([]map[string]string, []RowError, error) {
-	recs, err := csv.NewReader(r).ReadAll()
-	if err != nil {
-		return nil, nil, err
+func rowErrs(in []csvimport.RowError) []RowError {
+	out := make([]RowError, 0, len(in))
+	for _, e := range in {
+		out = append(out, RowError{Row: e.Row, Message: e.Message})
 	}
-	if len(recs) == 0 {
-		return nil, nil, errors.New("empty CSV")
-	}
-	header := recs[0]
-	var rows []map[string]string
-	var rowErrs []RowError
-	for i, rec := range recs[1:] {
-		m := map[string]string{}
-		for j, h := range header {
-			if j < len(rec) {
-				m[strings.TrimSpace(strings.ToLower(h))] = strings.TrimSpace(rec[j])
-			}
-		}
-		if m["phone"] == "" {
-			rowErrs = append(rowErrs, RowError{Row: i + 2, Message: "phone is required"})
-			continue
-		}
-		rows = append(rows, m)
-	}
-	return rows, rowErrs, nil
+	return out
 }
 
-func (csvParser) ParseTargets(r io.Reader) (ParsedTargets, error) {
-	rows, rowErrs, err := readCSV(r)
+func (listParser) ParseTargets(r io.Reader, filename string) (ParsedTargets, error) {
+	res, err := csvimport.ParseTargetsFile(r, filename, csvimport.Options{})
 	if err != nil {
 		return ParsedTargets{}, err
 	}
-	out := ParsedTargets{Skipped: len(rowErrs), Errors: rowErrs}
-	for _, m := range rows {
-		t := domain.CampaignTarget{Phone: m["phone"], Name: m["name"], Vars: map[string]string{}}
-		for k, v := range m {
-			if k != "phone" && k != "name" {
-				t.Vars[k] = v
-			}
+	return ParsedTargets{Targets: res.Targets, Skipped: res.Skipped, Errors: rowErrs(res.Errors)}, nil
+}
+
+func (listParser) Preview(r io.Reader, filename string, n int) (PreviewResult, error) {
+	p, err := csvimport.PreviewFile(r, filename, n)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	return PreviewResult{Columns: p.Columns, Rows: p.Rows, Mapping: p.Mapping, Total: p.Total, Format: string(p.Format)}, nil
+}
+
+func (listParser) ParseContacts(r io.Reader, filename string) (ParsedContacts, error) {
+	res, err := csvimport.ParseContactsFile(r, filename, csvimport.Options{})
+	if err != nil {
+		return ParsedContacts{}, err
+	}
+	return ParsedContacts{Contacts: res.Contacts, Skipped: res.Skipped, Errors: rowErrs(res.Errors)}, nil
+}
+
+// fakeDNC implements domain.DoNotCallRepository (without DNCInserter).
+type fakeDNC struct {
+	mu      sync.Mutex
+	entries map[uuid.UUID][]domain.DoNotCallEntry // by org, oldest first
+}
+
+func newFakeDNC() *fakeDNC { return &fakeDNC{entries: map[uuid.UUID][]domain.DoNotCallEntry{}} }
+
+func (d *fakeDNC) insert(e *domain.DoNotCallEntry) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, x := range d.entries[e.OrgID] {
+		if x.Phone == e.Phone {
+			*e = x
+			return false
 		}
-		out.Targets = append(out.Targets, t)
+	}
+	ensureID(&e.ID)
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = time.Now().UTC()
+	}
+	d.entries[e.OrgID] = append(d.entries[e.OrgID], *e)
+	return true
+}
+
+func (d *fakeDNC) AddDoNotCall(_ context.Context, e *domain.DoNotCallEntry) error {
+	d.insert(e)
+	return nil
+}
+
+func (d *fakeDNC) RemoveDoNotCall(_ context.Context, orgID uuid.UUID, phone string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	list := d.entries[orgID]
+	for i, x := range list {
+		if x.Phone == phone {
+			d.entries[orgID] = slices.Delete(list, i, i+1)
+			return nil
+		}
+	}
+	return domain.ErrNotFound
+}
+
+func (d *fakeDNC) ListDoNotCall(_ context.Context, orgID uuid.UUID, search string, limit, offset int) ([]domain.DoNotCallEntry, int, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	var out []domain.DoNotCallEntry
+	for _, x := range d.entries[orgID] {
+		if search == "" || strings.Contains(x.Phone+" "+x.Reason, search) {
+			out = append(out, x)
+		}
+	}
+	total := len(out)
+	offset = min(offset, total)
+	out = out[offset:]
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, total, nil
+}
+
+func (d *fakeDNC) IsDoNotCall(_ context.Context, orgID uuid.UUID, phone string) (bool, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, x := range d.entries[orgID] {
+		if x.Phone == phone {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (d *fakeDNC) FilterDoNotCall(ctx context.Context, orgID uuid.UUID, phones []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	for _, p := range phones {
+		if ok, _ := d.IsDoNotCall(ctx, orgID, p); ok {
+			out[p] = true
+		}
 	}
 	return out, nil
 }
 
-func (csvParser) ParseContacts(r io.Reader) (ParsedContacts, error) {
-	rows, rowErrs, err := readCSV(r)
-	if err != nil {
-		return ParsedContacts{}, err
-	}
-	out := ParsedContacts{Skipped: len(rowErrs), Errors: rowErrs}
-	for _, m := range rows {
-		out.Contacts = append(out.Contacts, domain.Contact{Phone: m["phone"], Name: m["name"]})
-	}
-	return out, nil
+// fakeDNCInserter adds the optional DNCInserter extension.
+type fakeDNCInserter struct{ *fakeDNC }
+
+func (d fakeDNCInserter) InsertDoNotCall(_ context.Context, e *domain.DoNotCallEntry) (bool, error) {
+	return d.insert(e), nil
+}
+
+// fakeStats implements CampaignStats with canned numbers.
+type fakeStats struct {
+	byStatus  map[domain.CampaignTargetStatus]int
+	byOutcome map[string]int
+}
+
+func (f fakeStats) CountTargetsByStatus(context.Context, uuid.UUID) (map[domain.CampaignTargetStatus]int, error) {
+	return f.byStatus, nil
+}
+
+func (f fakeStats) CountTargetsByOutcome(context.Context, uuid.UUID) (map[string]int, error) {
+	return f.byOutcome, nil
 }
 
 type fakeLexiconEngine struct {

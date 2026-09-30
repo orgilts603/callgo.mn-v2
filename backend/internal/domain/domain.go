@@ -219,6 +219,8 @@ type Call struct {
 	Sentiment     Sentiment      `json:"sentiment,omitempty"`
 	Intent        string         `json:"intent,omitempty"`
 	EndReason     string         `json:"endReason,omitempty"`
+	Outcome       string         `json:"outcome,omitempty"` // CampaignOutcome.Code (campaign calls)
+	OutcomeNote   string         `json:"outcomeNote,omitempty"`
 	LLMModelUsed  string         `json:"llmModelUsed,omitempty"`
 	Metadata      map[string]any `json:"metadata,omitempty"`
 	CreatedAt     time.Time      `json:"createdAt"`

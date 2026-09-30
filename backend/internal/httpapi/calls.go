@@ -241,6 +241,10 @@ func (s *server) dial(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	if err := s.checkDialable(ctx, orgID, to); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
 	numID, err := parseOptUUID(req.SIPNumberID, "sipNumberId")
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -400,6 +404,11 @@ type callOutcome struct {
 	Intent       string
 	DurationSec  int
 	LLMModelUsed string
+	// Outcome / OutcomeNote are the campaign result chosen by the AI; set
+	// only when HasOutcome.
+	HasOutcome  bool
+	Outcome     string
+	OutcomeNote string
 }
 
 // finalizeCall moves a non-terminal call to a terminal state, persists it,
@@ -464,6 +473,9 @@ func (s *server) finalizeCall(ctx context.Context, c *domain.Call, o callOutcome
 	if o.LLMModelUsed != "" {
 		c.LLMModelUsed = o.LLMModelUsed
 	}
+	if o.HasOutcome {
+		c.Outcome, c.OutcomeNote = o.Outcome, o.OutcomeNote
+	}
 	c.UpdatedAt = now
 	if err := s.d.Call.UpdateCall(ctx, c); err != nil {
 		return false, fmt.Errorf("update call: %w", err)
@@ -486,6 +498,9 @@ func (s *server) finalizeCall(ctx context.Context, c *domain.Call, o callOutcome
 	}
 	if c.LLMModelUsed != "" {
 		payload["llmModelUsed"] = c.LLMModelUsed
+	}
+	if c.Outcome != "" || c.OutcomeNote != "" {
+		payload["outcome"], payload["outcomeNote"] = c.Outcome, c.OutcomeNote
 	}
 	s.publish(ctx, c.OrgID, &id, domain.EventCallEnded, payload)
 	if s.d.Campaigns != nil && c.CampaignID != nil {

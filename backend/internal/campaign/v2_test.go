@@ -449,6 +449,13 @@ func TestUnansweredCallGetsNoContactOutcome(t *testing.T) {
 	assert.Empty(t, tg.OutcomeNote)
 	code, _ := callOutcome(new(f.call(f.tel.dials()[0].CallID)))
 	assert.Equal(t, "no_contact", code, "the call carries the outcome too")
+	var endedOutcome any
+	for _, ev := range f.bus.all() {
+		if ev.Type == domain.EventCallEnded && *ev.CallID == f.tel.dials()[0].CallID {
+			endedOutcome = ev.Payload.(map[string]any)["outcome"]
+		}
+	}
+	assert.Equal(t, "no_contact", endedOutcome, "call.ended carries the outcome")
 
 	// Without a no_contact code the outcome stays empty (and clears an old one).
 	noCode := f.addCampaign(domain.CampaignRunning, 1, 2, 1)

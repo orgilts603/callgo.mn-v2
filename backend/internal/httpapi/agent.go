@@ -42,10 +42,11 @@ type lexiconEntry struct {
 }
 
 type campaignInfo struct {
-	ID     uuid.UUID         `json:"id"`
-	Name   string            `json:"name"`
-	Script string            `json:"script"`
-	Vars   map[string]string `json:"vars"`
+	ID       uuid.UUID                `json:"id"`
+	Name     string                   `json:"name"`
+	Script   string                   `json:"script"`
+	Vars     map[string]string        `json:"vars"`
+	Outcomes []domain.CampaignOutcome `json:"outcomes"`
 }
 
 type bootstrapResponse struct {
@@ -167,7 +168,8 @@ func (s *server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 				s.writeErr(w, r, err)
 				return
 			}
-			campInfo = &campaignInfo{ID: c.ID, Name: c.Name, Script: c.Script, Vars: map[string]string{}}
+			campInfo = &campaignInfo{ID: c.ID, Name: c.Name, Script: c.Script, Vars: map[string]string{},
+				Outcomes: append([]domain.CampaignOutcome{}, c.Outcomes...)}
 			if target != nil {
 				for k, v := range target.Vars {
 					campInfo.Vars[k] = v
@@ -387,6 +389,10 @@ type callEndedPayload struct {
 	Intent       string  `json:"intent"`
 	DurationSec  float64 `json:"durationSec"`
 	LLMModelUsed string  `json:"llmModelUsed"`
+	// Outcome is one of the campaign's outcome codes (or ""); pointers tell
+	// "absent" from "empty".
+	Outcome     *string `json:"outcome"`
+	OutcomeNote *string `json:"outcomeNote"`
 }
 
 // ingestState caches per-request lookups.
@@ -506,6 +512,19 @@ func (s *server) ingestEvent(ctx context.Context, st *ingestState, ev agentEvent
 		case domain.SentimentPositive, domain.SentimentNeutral, domain.SentimentNegative:
 			o.Sentiment = sen
 		}
+		if p.Outcome != nil || p.OutcomeNote != nil {
+			var code, note string
+			if p.Outcome != nil {
+				code = *p.Outcome
+			}
+			if p.OutcomeNote != nil {
+				note = *p.OutcomeNote
+			}
+			o.HasOutcome = true
+			o.Outcome, o.OutcomeNote = cleanOutcome(code, note)
+		}
+		// finalizeCall stores the outcome on the call before notifying the
+		// campaign engine (OnCallEnded), which copies it onto the target.
 		if _, err := s.finalizeCall(ctx, call, o); err != nil {
 			return false, err
 		}

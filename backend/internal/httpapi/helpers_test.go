@@ -35,6 +35,7 @@ type env struct {
 	bus    *fakeBus
 	hub    *fakeHub
 	ctl    *fakeCampaigns
+	dnc    *fakeDNC
 	lex    *fakeLexiconEngine
 	tester *fakeTester
 	srv    *server
@@ -48,7 +49,7 @@ type env struct {
 func newEnv(t *testing.T, mutate ...func(*Deps, *Config)) *env {
 	t.Helper()
 	db := newFakeDB()
-	e := &env{t: t, db: db, tel: &fakeTelephony{}, bus: &fakeBus{}, hub: &fakeHub{}, ctl: &fakeCampaigns{db: db},
+	e := &env{t: t, db: db, tel: &fakeTelephony{}, bus: &fakeBus{}, hub: &fakeHub{}, ctl: &fakeCampaigns{db: db}, dnc: newFakeDNC(),
 		lex: &fakeLexiconEngine{}, tester: &fakeTester{}}
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -70,7 +71,8 @@ func newEnv(t *testing.T, mutate ...func(*Deps, *Config)) *env {
 
 	deps := Deps{
 		Org: db, SIPNumber: db, AgentProfile: db, LLMConfig: db, Call: db, Contact: db, Campaign: db, Lexicon: db,
-		Telephony: e.tel, Bus: e.bus, Live: e.hub, Campaigns: e.ctl, TargetParser: csvParser{}, ContactParser: csvParser{},
+		DNC:       e.dnc,
+		Telephony: e.tel, Bus: e.bus, Live: e.hub, Campaigns: e.ctl, TargetParser: listParser{}, ContactParser: listParser{},
 		LexiconEngine: e.lex, LLMTester: e.tester,
 	}
 	cfg := Config{JWTSecret: testJWT, AgentToken: testAgentToken, LiveKitAPIKey: testLKKey, LiveKitAPISecret: testLKSecret}
@@ -129,15 +131,21 @@ func (e *env) agent(method, path string, body any) *httptest.ResponseRecorder {
 
 func (e *env) multipart(path, token string, fields map[string]string, file string) *httptest.ResponseRecorder {
 	e.t.Helper()
+	return e.upload(path, token, fields, "data.csv", []byte(file))
+}
+
+// upload posts a multipart form with an optional "file" part named filename.
+func (e *env) upload(path, token string, fields map[string]string, filename string, file []byte) *httptest.ResponseRecorder {
+	e.t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
 	for k, v := range fields {
 		require.NoError(e.t, mw.WriteField(k, v))
 	}
-	if file != "" {
-		fw, err := mw.CreateFormFile("file", "data.csv")
+	if len(file) > 0 {
+		fw, err := mw.CreateFormFile("file", filename)
 		require.NoError(e.t, err)
-		_, err = fw.Write([]byte(file))
+		_, err = fw.Write(file)
 		require.NoError(e.t, err)
 	}
 	require.NoError(e.t, mw.Close())

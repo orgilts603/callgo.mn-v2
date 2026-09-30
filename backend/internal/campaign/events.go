@@ -30,11 +30,16 @@ func (e *Engine) callEvent(typ domain.EventType, call *domain.Call) domain.Event
 func (e *Engine) endedEvent(call *domain.Call) domain.Event {
 	cp := *call
 	id := cp.ID
-	return e.event(domain.EventCallEnded, cp.OrgID, &id, map[string]any{
+	payload := map[string]any{
 		"call":        cp,
 		"endReason":   cp.EndReason,
 		"durationSec": cp.DurationSec,
-	})
+	}
+	if code, note := callOutcome(&cp); code != "" || note != "" {
+		payload["outcome"] = code
+		payload["outcomeNote"] = note
+	}
+	return e.event(domain.EventCallEnded, cp.OrgID, &id, payload)
 }
 
 // progressEvent builds campaign.progress ({"campaign": Campaign, "target": CampaignTarget|null}).

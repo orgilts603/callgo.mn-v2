@@ -116,7 +116,7 @@ func run() error {
 	// ---- domain services ---------------------------------------------------
 	lex := lexicon.NewService(store, hub, log)
 
-	engine = campaign.NewEngine(store, store, store, store, store, tel, hub, campaign.Options{
+	engine = campaign.NewEngine(store, store, store, store, store, store, tel, hub, campaign.Options{
 		PollInterval:         cfg.Campaign.PollInterval,
 		RetryBackoff:         cfg.Campaign.RetryBackoff,
 		RingTimeout:          cfg.SIP.RingTimeout,

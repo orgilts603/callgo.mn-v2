@@ -104,6 +104,14 @@ func (s *server) routes() http.Handler {
 				r.Post("/{id}/hangup", s.hangup)
 				r.Post("/{id}/transfer", s.transfer)
 				r.Get("/{id}/recording", s.recording)
+				r.Post("/{id}/dnc", s.callToDNC)
+			})
+
+			r.Route("/dnc", func(r chi.Router) {
+				r.Get("/", s.listDNC)
+				r.Post("/", s.createDNC)
+				r.With(admin).Post("/import", s.importDNC)
+				r.With(admin).Delete("/{phone}", s.deleteDNC)
 			})
 			r.Patch("/turns/{id}", s.patchTurn)
 
@@ -126,7 +134,11 @@ func (s *server) routes() http.Handler {
 			r.Route("/campaigns", func(r chi.Router) {
 				r.Get("/", s.listCampaigns)
 				r.Get("/{id}", s.getCampaign)
+				r.Get("/{id}/stats", s.campaignStats)
+				r.Get("/{id}/export.xlsx", s.exportCampaign)
+				r.Post("/preview", s.previewCampaign)
 				r.With(admin).Post("/", s.createCampaign)
+				r.With(admin).Put("/{id}", s.updateCampaign)
 				r.With(admin).Post("/{id}/start", s.startCampaign)
 				r.With(admin).Post("/{id}/pause", s.pauseCampaign)
 				r.With(admin).Delete("/{id}", s.deleteCampaign)
