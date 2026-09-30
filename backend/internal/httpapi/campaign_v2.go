@@ -227,7 +227,7 @@ type campaignUpdate struct {
 	DryRunLimit    *int                      `json:"dryRunLimit"`
 }
 
-// validated holds the parsed, checked values of a campaignUpdate.
+// validatedUpdate holds the parsed, checked values of a campaignUpdate.
 type validatedUpdate struct {
 	name, script   *string
 	sipNumberID    *uuid.UUID

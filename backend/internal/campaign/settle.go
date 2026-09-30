@@ -77,6 +77,13 @@ func (e *Engine) settle(ctx context.Context, campaignID uuid.UUID, t *domain.Cam
 	}
 	if o.setOutcome {
 		t.Outcome, t.OutcomeNote = o.code, o.note
+		// A call that was never answered (reported by a webhook or the agent
+		// before the engine's own dial result) carries no structured outcome;
+		// record "no_contact" when the campaign defines it so exports stay
+		// complete regardless of which path settled the target first.
+		if t.Outcome == "" && o.kind == outcomeRetry {
+			t.Outcome = noContactCode(c.Outcomes)
+		}
 	}
 	switch o.kind {
 	case outcomeDone:

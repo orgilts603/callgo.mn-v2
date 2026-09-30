@@ -139,6 +139,8 @@ func run() error {
 		Contact:       store,
 		Campaign:      store,
 		Lexicon:       store,
+		DNC:           store,
+		CampaignStats: store,
 		Telephony:     tel,
 		Bus:           hub,
 		Live:          hub,
@@ -198,20 +200,28 @@ func run() error {
 // csvAdapter bridges internal/csvimport to the httpapi parser interfaces.
 type csvAdapter struct{}
 
-func (csvAdapter) ParseTargets(r io.Reader) (httpapi.ParsedTargets, error) {
-	res, err := csvimport.ParseTargets(r, csvimport.Options{})
+func (csvAdapter) ParseTargets(r io.Reader, filename string) (httpapi.ParsedTargets, error) {
+	res, err := csvimport.ParseTargetsFile(r, filename, csvimport.Options{})
 	if err != nil {
 		return httpapi.ParsedTargets{}, err
 	}
 	return httpapi.ParsedTargets{Targets: res.Targets, Skipped: res.Skipped, Errors: rowErrors(res.Errors)}, nil
 }
 
-func (csvAdapter) ParseContacts(r io.Reader) (httpapi.ParsedContacts, error) {
-	res, err := csvimport.ParseContacts(r, csvimport.Options{})
+func (csvAdapter) ParseContacts(r io.Reader, filename string) (httpapi.ParsedContacts, error) {
+	res, err := csvimport.ParseContactsFile(r, filename, csvimport.Options{})
 	if err != nil {
 		return httpapi.ParsedContacts{}, err
 	}
 	return httpapi.ParsedContacts{Contacts: res.Contacts, Skipped: res.Skipped, Errors: rowErrors(res.Errors)}, nil
+}
+
+func (csvAdapter) Preview(r io.Reader, filename string, n int) (httpapi.PreviewResult, error) {
+	p, err := csvimport.PreviewFile(r, filename, n)
+	if err != nil {
+		return httpapi.PreviewResult{}, err
+	}
+	return httpapi.PreviewResult{Columns: p.Columns, Rows: p.Rows, Mapping: p.Mapping, Total: p.Total, Format: string(p.Format)}, nil
 }
 
 func rowErrors(in []csvimport.RowError) []httpapi.RowError {
@@ -277,6 +287,7 @@ func (b *mockBridge) onEvent(roomName, evt string) {
 		call.Summary = "Туршилтын дуудлага (mock telephony) амжилттай дууслаа."
 		call.Sentiment = domain.SentimentNeutral
 		call.Intent = "test"
+		b.mockOutcome(ctx, call)
 		b.finish(call, now)
 		evType = domain.EventCallEnded
 	case lk.MockEventBusy:
@@ -313,6 +324,35 @@ func (b *mockBridge) onEvent(roomName, evt string) {
 			eng.OnCallEnded(ctx, call)
 		}
 	}
+}
+
+// mockOutcome stands in for the agent's post-call analysis: campaign calls
+// get a deterministic structured outcome (first terminal outcome, or the
+// second one for numbers ending in an even digit) so the Excel export and
+// stats can be demoed without a real LLM.
+func (b *mockBridge) mockOutcome(ctx context.Context, call *domain.Call) {
+	if call.CampaignID == nil {
+		return
+	}
+	c, err := b.store.GetCampaign(ctx, *call.CampaignID)
+	if err != nil || len(c.Outcomes) == 0 {
+		return
+	}
+	var terminal []domain.CampaignOutcome
+	for _, o := range c.Outcomes {
+		if o.Terminal && o.Code != "no_contact" {
+			terminal = append(terminal, o)
+		}
+	}
+	if len(terminal) == 0 {
+		return
+	}
+	pick := terminal[0]
+	if n := len(call.ToNumber); n > 0 && (call.ToNumber[n-1]-'0')%2 == 0 && len(terminal) > 1 {
+		pick = terminal[1]
+	}
+	call.Outcome = pick.Code
+	call.OutcomeNote = "Mock telephony: " + pick.Label
 }
 
 func (b *mockBridge) finish(call *domain.Call, now time.Time) {
