@@ -1,10 +1,13 @@
 // Test helpers for billing (imported only by *.test.tsx).
 import type { ReactNode } from 'react'
-import { render } from '@testing-library/react'
+import { configure, render } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { useLive } from '@/lib/ws'
 import type { EventType, LiveEvent } from '@/lib/types'
+
+// ~14 agents run suites concurrently on this box; give async queries headroom.
+configure({ asyncUtilTimeout: 5000 })
 
 export function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } })

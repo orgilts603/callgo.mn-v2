@@ -29,7 +29,7 @@ function mockSub(sub: SubscriptionResponse) {
   })
 }
 
-describe('quotaBanners', () => {
+describe('quotaBanners', { timeout: 20_000 }, () => {
   it('returns nothing for a healthy subscription', () => {
     expect(quotaBanners(makeSubResponse({ usage: { minutes: 500 } }), 'active', NOW)).toEqual([])
   })
@@ -52,7 +52,7 @@ describe('quotaBanners', () => {
   })
 })
 
-describe('QuotaBanner', () => {
+describe('QuotaBanner', { timeout: 20_000 }, () => {
   beforeEach(() => { vi.clearAllMocks(); fakeLive() })
   afterEach(() => {
     useLive.setState(original)

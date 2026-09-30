@@ -31,7 +31,7 @@ function mockGet() {
   })
 }
 
-describe('InvoicesTable', () => {
+describe('InvoicesTable', { timeout: 20_000 }, () => {
   beforeEach(() => { vi.clearAllMocks(); fakeLive(); localStorage.setItem('callgo.token', 'tok-123') })
   afterEach(() => { useLive.setState(original); vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear() })
 

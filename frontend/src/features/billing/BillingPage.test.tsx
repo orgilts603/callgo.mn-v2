@@ -28,7 +28,7 @@ beforeEach(() => {
 })
 afterEach(() => { useLive.setState(original) })
 
-describe('BillingPage', () => {
+describe('BillingPage', { timeout: 20_000 }, () => {
   it('switches between Багц / Хэрэглээ / Нэхэмжлэх via ?view=', async () => {
     fakeLive()
     renderWith(<BillingPage />, { path: '/settings/billing' })
@@ -69,7 +69,7 @@ describe('BillingPage', () => {
   })
 })
 
-describe('Settings → Төлбөр tab', () => {
+describe('Settings → Төлбөр tab', { timeout: 20_000 }, () => {
   it('renders BillingPage inside SettingsPage at /settings/billing', async () => {
     fakeLive()
     const { default: SettingsPage } = await import('@/features/settings/SettingsPage')

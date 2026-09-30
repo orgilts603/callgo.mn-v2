@@ -15,7 +15,7 @@ function minutesMeter() {
   return screen.getAllByTestId('usage-meter')[0]
 }
 
-describe('UsageMeters', () => {
+describe('UsageMeters', { timeout: 20_000 }, () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
   it.each([

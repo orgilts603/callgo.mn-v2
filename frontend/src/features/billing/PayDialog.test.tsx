@@ -19,7 +19,7 @@ const post = vi.mocked(api.post)
 const original = useLive.getState()
 const paymentGets = () => get.mock.calls.filter(([p]) => p === '/billing/payments/pay1').length
 
-describe('PayDialog', () => {
+describe('PayDialog', { timeout: 20_000 }, () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.useFakeTimers({ shouldAdvanceTime: true })

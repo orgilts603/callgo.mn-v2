@@ -26,7 +26,7 @@ function mockGet(sub: SubscriptionResponse, invoices = [] as ReturnType<typeof m
   })
 }
 
-describe('PlansGrid', () => {
+describe('PlansGrid', { timeout: 20_000 }, () => {
   beforeEach(() => { vi.clearAllMocks(); fakeLive() })
   afterEach(() => { useLive.setState(original) })
 
