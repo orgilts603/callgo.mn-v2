@@ -161,11 +161,14 @@ func (r *Recorder) push(leg int, ts int64, pcm []int16, rate int) error {
 	return r.drain()
 }
 
-// shiftOrigin moves time zero earlier to ts, prepending silence to both legs.
+// shiftOrigin moves time zero earlier to ts, prepending silence to any leg that already has content.
 func (r *Recorder) shiftOrigin(ts int64) {
 	n := int((r.origin - ts) * int64(r.rate) / 1000)
 	for i := range r.legs {
 		l := &r.legs[i]
+		if l.rs == nil && len(l.pending) == 0 {
+			continue // leg has no content yet; it will be placed by timestamp
+		}
 		l.pending = append(make([]int16, n, n+len(l.pending)), l.pending...)
 		l.segStart += int64(n)
 	}

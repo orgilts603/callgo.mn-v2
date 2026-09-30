@@ -470,7 +470,8 @@ func (s *server) finalizeCall(ctx context.Context, c *domain.Call, o callOutcome
 		return false, nil
 	}
 	id := c.ID
-	payload := map[string]any{"call": c, "endReason": c.EndReason, "durationSec": c.DurationSec}
+	snap := *c
+	payload := map[string]any{"call": &snap, "endReason": c.EndReason, "durationSec": c.DurationSec}
 	if c.Summary != "" {
 		payload["summary"] = c.Summary
 	}

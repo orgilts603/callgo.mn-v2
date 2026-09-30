@@ -1,4 +1,16 @@
-// Placeholder — replaced by the app-shell agent (src/app/*).
+import { useState } from 'react'
+import { RouterProvider } from 'react-router-dom'
+import { Providers } from '@/app/providers'
+import { createAppRouter } from '@/app/router'
+import { ErrorBoundary } from '@/components/layout/ErrorBoundary'
+
 export default function App() {
-  return <div className="p-8">CallGo.mn</div>
+  const [router] = useState(() => createAppRouter())
+  return (
+    <ErrorBoundary>
+      <Providers>
+        <RouterProvider router={router} />
+      </Providers>
+    </ErrorBoundary>
+  )
 }

@@ -227,7 +227,8 @@ func (s *server) publishEvent(ctx context.Context, ev domain.Event) {
 
 func (s *server) publishCall(ctx context.Context, typ domain.EventType, c *domain.Call) {
 	id := c.ID
-	s.publish(ctx, c.OrgID, &id, typ, map[string]any{"call": c})
+	snap := *c
+	s.publish(ctx, c.OrgID, &id, typ, map[string]any{"call": &snap})
 }
 
 // goBackground runs fn detached from the request context.

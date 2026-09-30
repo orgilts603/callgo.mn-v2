@@ -17,7 +17,7 @@ import logging
 import random
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from types import TracebackType
-from typing import Any
+from typing import Any, Self
 from uuid import UUID
 
 import httpx
@@ -84,7 +84,7 @@ class BackendClient:
     def base_url(self) -> str:
         return self._base_url
 
-    async def __aenter__(self) -> BackendClient:
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(
@@ -153,7 +153,7 @@ class BackendClient:
 
     def _backoff(self, attempt: int) -> float:
         delay = min(self._backoff_max, self._backoff_base * (2**attempt))
-        return delay * (0.5 + random.random() / 2)  # noqa: S311 - jitter, not crypto
+        return delay * (0.5 + random.random() / 2)
 
     async def _request(
         self,

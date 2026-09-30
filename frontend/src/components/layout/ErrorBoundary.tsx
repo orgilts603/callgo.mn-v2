@@ -1,5 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
-import { isRouteErrorResponse, Link, useRouteError } from 'react-router-dom'
+import { isRouteErrorResponse, useRouteError } from 'react-router-dom'
 import { AlertOctagon, RotateCw } from 'lucide-react'
 import { Button } from '@/components/ui'
 
@@ -21,9 +21,9 @@ export function ErrorCard({ title, message, onRetry }: { title?: string; message
           <Button variant="secondary" size="sm" onClick={onRetry ?? (() => window.location.reload())}>
             <RotateCw /> Дахин ачаалах
           </Button>
-          <Link to="/" className="inline-flex h-7 items-center rounded-[var(--radius-sm)] px-2.5 text-xs font-medium text-[var(--fg-muted)] hover:bg-[var(--surface-2)] hover:text-[var(--fg)]">
+          <a href="/" className="inline-flex h-7 items-center rounded-[var(--radius-sm)] px-2.5 text-xs font-medium text-[var(--fg-muted)] hover:bg-[var(--surface-2)] hover:text-[var(--fg)]">
             Нүүр хуудас
-          </Link>
+          </a>
         </div>
       </div>
     </div>

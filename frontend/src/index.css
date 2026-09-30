@@ -1,3 +1,3 @@
 @import "tailwindcss";
-/* Design tokens live in src/app/theme.css (owned by the app-shell agent). */
+/* Design tokens, base styles and Tailwind aliases live in src/app/theme.css. */
 @import "./app/theme.css";

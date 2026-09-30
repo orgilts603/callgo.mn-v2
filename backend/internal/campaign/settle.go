@@ -466,9 +466,6 @@ func (e *Engine) sweepStale(ctx context.Context) {
 				events = append(events, e.progressEvent(c, &t))
 			}
 		} else {
-			if !call.Status.IsTerminal() && call.AnsweredAt == nil {
-				call.AnsweredAt = &s.since
-			}
 			events, err = e.settleFromCall(ctx, cd.campaignID, &t, call)
 			if err == nil && len(events) == 0 {
 				// Not stale by the call's own clock: keep holding the slot.
