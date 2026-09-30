@@ -69,3 +69,19 @@ describe('BillingPage', () => {
     expect(await screen.findByText('Ярианы минут')).toBeInTheDocument()
   })
 })
+
+describe('Settings → Төлбөр tab', () => {
+  it('renders BillingPage inside SettingsPage at /settings/billing', async () => {
+    fakeLive()
+    const { default: SettingsPage } = await import('@/features/settings/SettingsPage')
+    render(
+      <QueryClientProvider client={makeClient()}>
+        <MemoryRouter initialEntries={['/settings/billing']}>
+          <Routes><Route path="/settings/:tab" element={<SettingsPage />} /></Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(screen.getByRole('link', { name: /Төлбөр/ })).toHaveAttribute('aria-current', 'page')
+    expect(await screen.findByTestId('plan-growth')).toBeInTheDocument()
+  })
+})

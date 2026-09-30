@@ -135,7 +135,7 @@ export default function ApiKeysTab() {
         <EmptyState icon={<KeyRound />}
           title={feature ? 'API түлхүүр таны багцад ороогүй' : 'Хандах эрхгүй'}
           description={feature ? 'API ашиглахын тулд багцаа ахиулна уу.' : 'API түлхүүрийг зөвхөн эзэмшигч болон админ удирдана.'}
-          action={feature ? <Link to="/settings/billing"><Button size="sm" variant="secondary" tabIndex={-1}>Багц харах</Button></Link> : undefined}
+          action={feature ? <Link to="/settings/billing" className="inline-flex h-7 items-center rounded-[var(--radius-sm)] border border-[var(--border)] bg-[var(--surface-2)] px-2.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface-3)]">Багц харах</Link> : undefined}
         />
       </Card>
     )

@@ -51,8 +51,11 @@ test.describe('CallGo.mn dashboard smoke', () => {
     await expect(drawer).toBeVisible()
     // The drawer header shows "from → to" of the selected call.
     await expect(drawer.getByText(/\d/).first()).toBeVisible()
-    await drawer.getByRole('button', { name: 'Close' }).click()
+    // Escape closes the drawer (a pointer click on its close button is flaky
+    // on software-rendered headless Chromium while live rows keep animating).
+    await page.keyboard.press('Escape')
     await expect(page.getByRole('dialog')).toHaveCount(0)
+    await expect(page).not.toHaveURL(/call=/)
   })
 
   test('creates a campaign from a generated CSV and lists it', async ({ page }) => {

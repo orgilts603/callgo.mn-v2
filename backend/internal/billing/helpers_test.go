@@ -129,3 +129,5 @@ func (f *fixture) callMinutes(orgID uuid.UUID, minutes int) {
 		ID: uuid.New(), OrgID: orgID, StartedAt: ans, AnsweredAt: &ans, EndedAt: &now, DurationSec: minutes * 60,
 	}))
 }
+
+func zeroLog() zerolog.Logger { return zerolog.Nop() }
