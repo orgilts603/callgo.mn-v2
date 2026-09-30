@@ -1,17 +1,281 @@
-/* Design tokens — the app-shell agent owns and extends this file. */
+/* CallGo.mn design tokens — "Midnight Navy".
+ * Owned by the app-shell agent. Components reference these as var(--token)
+ * (e.g. bg-[var(--surface-1)]) or through the Tailwind aliases declared in
+ * the @theme block below (e.g. bg-surface-1, text-fg-muted, border-border).
+ * Dark is the default; [data-theme="light"] on <html> switches to light. */
+
 :root {
   color-scheme: dark;
-  --surface-0: #0b1020;   /* page background (midnight navy) */
-  --surface-1: #111832;   /* cards */
-  --surface-2: #182042;   /* hover / inputs */
-  --surface-3: #202a55;
+
+  /* Surfaces (back → front) */
+  --surface-0: #0b1020;      /* page background */
+  --surface-1: #111832;      /* cards, sidebar */
+  --surface-2: #182042;      /* hover, inputs, subtle fills */
+  --surface-3: #202a55;      /* pressed / selected */
+  --surface-inset: #080c19;  /* wells, code, input bg */
+  --surface-overlay: #131b38;/* popovers, menus, tooltips */
+  --backdrop: rgb(3 6 16 / 0.66);
+
+  /* Borders */
   --border: #253061;
+  --border-subtle: #1b2449;
+  --border-strong: #34407a;
+
+  /* Foreground tiers */
   --fg: #e6e9f5;
   --fg-muted: #9aa3c7;
   --fg-subtle: #5f6a99;
+  --fg-disabled: #465081;
+  --fg-on-accent: #ffffff;
+
+  /* Accent (indigo → violet) */
   --accent: #6366f1;
   --accent-hover: #4f46e5;
-  --accent-fg: #c7d2fe;
+  --accent-fg: #c7d2fe;       /* accent-coloured text on dark */
+  --accent-soft: rgb(99 102 241 / 0.14);
+  --accent-border: rgb(99 102 241 / 0.4);
+  --accent-2: #8b5cf6;        /* violet, secondary accent */
+  --accent-2-soft: rgb(139 92 246 / 0.14);
+
+  /* Semantic */
+  --success: #34d399;
+  --success-fg: #6ee7b7;
+  --success-soft: rgb(16 185 129 / 0.12);
+  --success-border: rgb(16 185 129 / 0.32);
+  --warning: #fbbf24;
+  --warning-fg: #fcd34d;
+  --warning-soft: rgb(245 158 11 / 0.12);
+  --warning-border: rgb(245 158 11 / 0.32);
+  --danger: #f87171;
+  --danger-fg: #fca5a5;
+  --danger-solid: #dc2626;
+  --danger-solid-hover: #b91c1c;
+  --danger-soft: rgb(239 68 68 / 0.12);
+  --danger-border: rgb(239 68 68 / 0.32);
+  --info: #38bdf8;
+  --info-fg: #7dd3fc;
+  --info-soft: rgb(14 165 233 / 0.12);
+  --info-border: rgb(14 165 233 / 0.32);
+  --neutral-dot: #8891b8;
+
+  /* Focus */
+  --focus-ring: rgb(129 140 248 / 0.7);
+  --focus-ring-offset: var(--surface-0);
+
+  /* Charts (validated categorical pairs, dark surface) */
+  --chart-1: #7478f0;          /* inbound */
+  --chart-2: #26a69a;          /* outbound / completed */
+  --chart-3: #e5484d;          /* failed */
+  --chart-grid: #1d2650;
+  --chart-axis: #5f6a99;
+  --chart-cursor: rgb(129 140 248 / 0.12);
+
+  /* Elevation & shape */
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.35), 0 1px 2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.35);
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+
+  /* Layout */
+  --sidebar-w: 232px;
+  --sidebar-w-collapsed: 56px;
+  --topbar-h: 52px;
+  --content-max: 1440px;
+
+  /* Scrollbar */
+  --scrollbar-thumb: #27315f;
+  --scrollbar-thumb-hover: #34407a;
+
+  --selection: rgb(99 102 241 / 0.35);
 }
-html, body, #root { height: 100%; }
-body { background: var(--surface-0); color: var(--fg); font-family: Inter, ui-sans-serif, system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --surface-0: #f6f7fb;
+  --surface-1: #ffffff;
+  --surface-2: #eef0f7;
+  --surface-3: #e2e6f2;
+  --surface-inset: #f9fafc;
+  --surface-overlay: #ffffff;
+  --backdrop: rgb(15 20 40 / 0.35);
+
+  --border: #dde1ee;
+  --border-subtle: #e9ecf4;
+  --border-strong: #c5cbe0;
+
+  --fg: #141a33;
+  --fg-muted: #555e84;
+  --fg-subtle: #8a92b3;
+  --fg-disabled: #b3b9d1;
+
+  --accent: #5b5ef0;
+  --accent-hover: #4a4cd9;
+  --accent-fg: #4338ca;
+  --accent-soft: rgb(91 94 240 / 0.1);
+  --accent-border: rgb(91 94 240 / 0.35);
+  --accent-2: #7c3aed;
+  --accent-2-soft: rgb(124 58 237 / 0.1);
+
+  --success: #059669;
+  --success-fg: #047857;
+  --success-soft: rgb(16 185 129 / 0.1);
+  --success-border: rgb(16 185 129 / 0.35);
+  --warning: #d97706;
+  --warning-fg: #b45309;
+  --warning-soft: rgb(245 158 11 / 0.12);
+  --warning-border: rgb(245 158 11 / 0.4);
+  --danger: #dc2626;
+  --danger-fg: #b91c1c;
+  --danger-soft: rgb(239 68 68 / 0.08);
+  --danger-border: rgb(239 68 68 / 0.35);
+  --info: #0284c7;
+  --info-fg: #0369a1;
+  --info-soft: rgb(14 165 233 / 0.1);
+  --info-border: rgb(14 165 233 / 0.35);
+  --neutral-dot: #8a92b3;
+
+  --focus-ring: rgb(91 94 240 / 0.55);
+
+  --chart-1: #5a5fd6;
+  --chart-2: #0d9488;
+  --chart-3: #d93d42;
+  --chart-grid: #e9ecf4;
+  --chart-axis: #8a92b3;
+  --chart-cursor: rgb(91 94 240 / 0.08);
+
+  --shadow-sm: 0 1px 2px rgb(20 26 51 / 0.06);
+  --shadow-md: 0 4px 12px rgb(20 26 51 / 0.08), 0 1px 2px rgb(20 26 51 / 0.06);
+  --shadow-lg: 0 16px 48px rgb(20 26 51 / 0.16), 0 2px 6px rgb(20 26 51 / 0.08);
+
+  --scrollbar-thumb: #cfd4e6;
+  --scrollbar-thumb-hover: #b5bcd6;
+  --selection: rgb(91 94 240 / 0.2);
+}
+
+/* Tailwind aliases: bg-surface-1, text-fg-muted, border-border, ring-focus … */
+@theme inline {
+  --font-sans: 'Inter', 'Inter var', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --color-surface-0: var(--surface-0);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-surface-inset: var(--surface-inset);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-border: var(--border);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-2: var(--accent-2);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-danger: var(--danger);
+  --color-info: var(--info);
+  --color-focus: var(--focus-ring);
+}
+
+@layer base {
+  html, body, #root { height: 100%; }
+  html {
+    font-size: 16px;
+    text-size-adjust: 100%;
+  }
+  body {
+    margin: 0;
+    background: var(--surface-0);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: 13.5px;
+    line-height: 1.5;
+    font-feature-settings: 'cv11', 'ss01', 'ss03';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection { background: var(--selection); color: inherit; }
+
+  /* Keyboard focus: one consistent ring, never on mouse click. */
+  :focus { outline: none; }
+  :focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+  }
+
+  button, [role='button'] { cursor: pointer; }
+  button:disabled { cursor: not-allowed; }
+  a { color: inherit; text-decoration: none; }
+  input, textarea, select, button { font: inherit; color: inherit; }
+  input::-ms-reveal { display: none; }
+  hr { border-color: var(--border); }
+  kbd {
+    font-family: var(--font-sans);
+    font-size: 10.5px;
+    line-height: 1;
+    padding: 2px 5px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: var(--fg-muted);
+  }
+
+  /* Scrollbars */
+  * { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover { background-color: var(--scrollbar-thumb-hover); }
+  ::-webkit-scrollbar-corner { background: transparent; }
+
+  /* Browser autofill must not paint inputs yellow/white on dark. */
+  input:-webkit-autofill,
+  input:-webkit-autofill:hover,
+  input:-webkit-autofill:focus {
+    -webkit-text-fill-color: var(--fg);
+    -webkit-box-shadow: 0 0 0 1000px var(--surface-inset) inset;
+    caret-color: var(--fg);
+    transition: background-color 9999s ease-in-out 0s;
+  }
+}
+
+@layer components {
+  .tabular { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum'; }
+  .mono { font-family: var(--font-mono); font-size: 0.95em; }
+  .text-balance { text-wrap: balance; }
+  .scrollbar-none { scrollbar-width: none; }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+  .surface-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+  .hairline { border-color: var(--border-subtle); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@keyframes callgo-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes callgo-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+.animate-fade-in { animation: callgo-fade-in 120ms ease-out; }
+.animate-pop-in { animation: callgo-pop-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1); }
