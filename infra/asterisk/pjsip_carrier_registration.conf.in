@@ -1,0 +1,26 @@
+; =============================================================================
+; CallGo.mn — carrier REGISTER (rendered to pjsip_carrier_registration.conf
+; only when CARRIER_REGISTER=yes). Операторт бүртгүүлэх (REGISTER) хэсэг.
+;
+; Asterisk registers to the carrier every `expiration` seconds so the carrier
+; knows where to send INVITEs for your DIDs. line=yes tags the Contact with a
+; ;line= parameter so inbound INVITEs are matched to the `carrier` endpoint
+; even if they arrive from an SBC address missing from CARRIER_MATCH.
+; Check with: asterisk -rx "pjsip show registrations"
+; =============================================================================
+[carrier-reg]
+type=registration
+transport=transport-udp
+outbound_auth=carrier-auth
+server_uri=sip:${CARRIER_HOST}:${CARRIER_PORT}
+client_uri=sip:${CARRIER_USERNAME}@${CARRIER_HOST}
+contact_user=${CARRIER_USERNAME}
+expiration=600
+retry_interval=30
+; After 403 Forbidden (wrong password) back off instead of hammering the SBC.
+forbidden_retry_interval=600
+fatal_retry_interval=600
+max_retries=10000
+auth_rejection_permanent=no
+line=yes
+endpoint=carrier

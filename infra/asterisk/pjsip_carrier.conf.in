@@ -1,0 +1,63 @@
+; =============================================================================
+; CallGo.mn — carrier trunk (rendered to pjsip_carrier.conf only when
+; CARRIER_HOST is set in .env). Операторын SIP шугам.
+;
+; Generic SIP trunk for a Mongolian carrier (Unitel, Mobicom, Skytel,
+; Univision, G-Mobile ...): the carrier gives you an SBC host, port, username,
+; password and one or more DIDs. Registration-based trunks additionally set
+; CARRIER_REGISTER=yes (pjsip_carrier_registration.conf); IP-authenticated
+; trunks rely on the identify match below only.
+; (Оператороос SBC хаяг, порт, нэвтрэх нэр, нууц үг, DID дугаар авна.)
+; =============================================================================
+
+
+[carrier-auth]
+type=auth
+auth_type=userpass
+username=${CARRIER_USERNAME}
+password=${CARRIER_PASSWORD}
+
+; Where to send calls: the carrier SBC. Dial(PJSIP/<number>@carrier) builds
+; the Request-URI sip:<number>@CARRIER_HOST:CARRIER_PORT.
+[carrier]
+type=aor
+contact=sip:${CARRIER_HOST}:${CARRIER_PORT}
+qualify_frequency=60
+qualify_timeout=5.0
+
+[carrier]
+type=endpoint
+transport=transport-udp
+context=from-carrier
+aors=carrier
+; Answer the carrier's 401/407 challenge on outbound INVITEs.
+outbound_auth=carrier-auth
+; From header of outbound calls. Many Mongolian carriers require the trunk
+; username (or the main DID) as From user and their own domain as From host.
+from_user=${CARRIER_FROM_USER}
+from_domain=${CARRIER_FROM_DOMAIN}
+; PSTN in Mongolia is G.711 A-law; u-law as fallback.
+disallow=all
+allow=alaw,ulaw
+direct_media=no
+; NAT: we sit behind Docker NAT; answer to where packets really come from.
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+dtmf_mode=rfc4733
+; Caller ID: accept the carrier's PAI/RPID and pass ours along.
+send_pai=yes
+send_rpid=yes
+trust_id_inbound=yes
+trust_id_outbound=yes
+rtp_timeout=60
+rtp_timeout_hold=600
+timers=yes
+language=en
+
+; Which source IPs are "the carrier". Carriers often signal from several SBC
+; addresses: CARRIER_MATCH is a comma separated list of IPs / CIDRs / hosts.
+[carrier]
+type=identify
+endpoint=carrier
+match=${CARRIER_MATCH}

@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 import numpy as np
 from livekit import rtc
 from livekit.agents import stt, utils
+from livekit.agents.language import LanguageCode
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
@@ -433,7 +434,7 @@ class WhisperSTT(stt.STT):
             return stt.SpeechEvent(
                 type=stt.SpeechEventType.FINAL_TRANSCRIPT,
                 request_id=request_id,
-                alternatives=[stt.SpeechData(language=fallback_lang, text="")],
+                alternatives=[stt.SpeechData(language=LanguageCode(fallback_lang), text="")],
             )
 
         o = self._opts
@@ -469,7 +470,7 @@ class WhisperSTT(stt.STT):
             request_id=request_id,
             alternatives=[
                 stt.SpeechData(
-                    language=detected,
+                    language=LanguageCode(detected),
                     text=text,
                     start_time=float(segments[0].start) if segments else 0.0,
                     end_time=float(segments[-1].end) if segments else 0.0,

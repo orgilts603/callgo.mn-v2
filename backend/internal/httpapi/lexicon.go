@@ -30,7 +30,7 @@ func (b *lexiconBody) validate(defaultScope domain.LexiconScope) (domain.Lexicon
 	if len(b.Wrong) > 200 || len(b.Correct) > 200 || len(b.Phonetic) > 200 {
 		return "", errInvalid("wrong, correct and phonetic must be at most 200 characters")
 	}
-	if strings.EqualFold(b.Wrong, b.Correct) && b.Phonetic == "" {
+	if b.Wrong == b.Correct && b.Phonetic == "" {
 		return "", errInvalid("wrong and correct must differ")
 	}
 	return parseScope(b.Scope, defaultScope)

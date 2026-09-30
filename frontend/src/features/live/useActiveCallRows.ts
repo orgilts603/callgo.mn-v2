@@ -65,9 +65,9 @@ export function useActiveCallRows(meta: Record<string, CallLiveMeta>, endedIds: 
   })
 
   // Reuse row objects whose inputs did not change so memoized table rows skip rendering.
-  const [cache] = useState(() => ({ rows: new Map<string, CallRow>() }))
+  // Instance-scoped memo of the previous rows (idempotent, so safe under StrictMode double render).
+  const [cache] = useState(() => new Map<string, CallRow>())
   const rows = useMemo(() => {
-    const next = new Map<string, CallRow>()
     const out: CallRow[] = []
     for (const call of calls) {
       const m = meta[call.id]
@@ -79,12 +79,12 @@ export function useActiveCallRows(meta: Record<string, CallLiveMeta>, endedIds: 
         agentState: m?.agentState ?? null,
         snippet: m?.snippet ?? null,
       }
-      const prev = cache.rows.get(call.id)
+      const prev = cache.get(call.id)
       const row = prev && sameRow(prev, candidate) ? prev : candidate
-      next.set(call.id, row)
       out.push(row)
     }
-    cache.rows = next
+    cache.clear()
+    for (const r of out) cache.set(r.id, r)
     return out
   }, [calls, meta, contactNames, campaignNames, cache])
 
