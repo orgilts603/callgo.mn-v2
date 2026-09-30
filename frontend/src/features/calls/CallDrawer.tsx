@@ -1,9 +1,13 @@
 import { useCallback, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowRight, Clock, Download, Megaphone, PhoneForwarded, PhoneOff, User } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { ArrowRight, Ban, Clock, Download, Megaphone, PhoneForwarded, PhoneOff, User } from 'lucide-react'
 import {
-  AgentStateBadge, Button, Card, CallStatusBadge, Drawer, EmptyState, Skeleton,
+  AgentStateBadge, Button, Card, CallStatusBadge, ConfirmDialog, Drawer, EmptyState, Field, Input, Skeleton,
 } from '@/components/ui'
+import { api } from '@/lib/api'
+import { dncKey } from '@/features/settings/hooks'
 import { fmtDateTime, fmtPhone } from '@/lib/utils'
 import type { Call, Contact } from '@/lib/types'
 import { isLiveStatus, useCallDetail, useCampaignNames } from './api'
@@ -52,12 +56,41 @@ function CallHeader({ call, contact, events }: { call?: Call; contact?: Contact 
   )
 }
 
+/** The customer's number: the caller on inbound calls, the callee on outbound ones. */
+export const customerNumber = (call: Pick<Call, 'direction' | 'fromNumber' | 'toNumber'>) =>
+  (call.direction === 'inbound' ? call.fromNumber : call.toNumber) || ''
+
+/** Confirm + POST /api/calls/{id}/dnc: adds the customer's number to the do-not-call list. */
+function DncDialog({ call, onClose }: { call: Pick<Call, 'id' | 'direction' | 'fromNumber' | 'toNumber'>; onClose: () => void }) {
+  const qc = useQueryClient()
+  const [reason, setReason] = useState('')
+  const number = customerNumber(call)
+  const mutation = useMutation({
+    mutationFn: () => api.post<unknown>(`/calls/${encodeURIComponent(call.id)}/dnc`, reason.trim() ? { reason: reason.trim() } : {}),
+    onSuccess: () => {
+      toast.success(`${fmtPhone(number)} хориглох жагсаалтад нэмэгдлээ`)
+      void qc.invalidateQueries({ queryKey: dncKey })
+    },
+    onError: (err: Error) => { toast.error(err.message || 'Хориглох жагсаалтад нэмж чадсангүй') },
+  })
+  return (
+    <ConfirmDialog open onClose={onClose} onConfirm={() => mutation.mutateAsync()} loading={mutation.isPending}
+      title="Хориглох жагсаалтад нэмэх үү?" description={fmtPhone(number)} confirmLabel="Нэмэх">
+      <p className="mb-3 text-sm text-[var(--fg-muted)]">Энэ дугаарт кампанит ажил болон гарах дуудлага цаашид хийгдэхгүй.</p>
+      <Field label="Шалтгаан (заавал биш)">
+        <Input value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Шалтгаан" />
+      </Field>
+    </ConfirmDialog>
+  )
+}
+
 function DrawerBody({ callId, events }: { callId: string; events: CallEventsState }) {
   const { data, isLoading, error } = useCallDetail(callId)
   const playerRef = useRef<AudioPlayerHandle>(null)
   const [playheadMs, setPlayheadMs] = useState<number | null>(null)
   const [confirmHangup, setConfirmHangup] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
+  const [dncOpen, setDncOpen] = useState(false)
   const seek = useCallback((ms: number) => playerRef.current?.seekMs(ms), [])
 
   if (isLoading) {
@@ -91,6 +124,11 @@ function DrawerBody({ callId, events }: { callId: string; events: CallEventsStat
             <PhoneForwarded className="h-3.5 w-3.5" /> Шилжүүлэх
           </Button>
         )}
+        {customerNumber(call) && (
+          <Button variant="outline" size="sm" onClick={() => setDncOpen(true)}>
+            <Ban className="h-3.5 w-3.5" /> Хориглох жагсаалтад нэмэх
+          </Button>
+        )}
         {hasRecording ? (
           <a href={call.recordingUrl} download target="_blank" rel="noreferrer"
             className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface-2)]">
@@ -115,6 +153,7 @@ function DrawerBody({ callId, events }: { callId: string; events: CallEventsStat
       </Card>
 
       {confirmHangup && <HangupDialog call={call} onClose={() => setConfirmHangup(false)} />}
+      {dncOpen && <DncDialog call={call} onClose={() => setDncOpen(false)} />}
       {transferOpen && <TransferDialog callId={call.id} onClose={() => setTransferOpen(false)} />}
     </div>
   )

@@ -1,21 +1,29 @@
 import { useEffect } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { api, HttpError } from '@/lib/api'
+import { api, getToken, HttpError } from '@/lib/api'
 import { useLive } from '@/lib/ws'
 import type {
-  AgentProfile, Call, Campaign, CampaignProgressPayload, CampaignStatus, CampaignTarget, ListResponse, SIPNumber,
+  AgentProfile, Call, Campaign, CampaignOutcome, CampaignPreview, CampaignProgressPayload, CampaignSchedule, CampaignStats,
+  CampaignStatus, CampaignTarget, ListResponse, SIPNumber,
 } from '@/lib/types'
 
 export interface CampaignDetail { campaign: Campaign; targets: ListResponse<CampaignTarget> }
 export interface ImportResult { imported: number; skipped: number; errors: { row: number; message: string }[] }
 export interface CreateCampaignResult { campaign: Campaign; targets: ImportResult }
 export type CampaignAction = 'start' | 'pause'
+export interface CampaignUpdateBody {
+  name?: string; script?: string; sipNumberId?: string; agentProfileId?: string; concurrency?: number; maxAttempts?: number
+  schedule?: Partial<CampaignSchedule>; outcomes?: CampaignOutcome[]; dryRunLimit?: number
+}
 
 export const campaignKeys = {
   all: ['campaigns'] as const,
   detail: (id: string) => ['campaign', id] as const,
   page: (id: string, limit: number, offset: number) => ['campaign', id, { limit, offset }] as const,
+  // Deliberately NOT under ['campaign', id]: detail-cache patchers assume that prefix holds CampaignDetail.
+  stats: (id: string) => ['campaign-stats', id] as const,
+  preview: ['campaigns', 'preview'] as const,
 }
 
 export const PAGE_SIZE = 50
@@ -61,8 +69,10 @@ const nextStatus: Record<CampaignAction, CampaignStatus> = { start: 'running', p
 export function useCampaignAction() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, action }: { id: string; action: CampaignAction }) =>
-      api.post<{ campaign: Campaign }>(`/campaigns/${id}/${action}`),
+    mutationFn: ({ id, action, dryRunLimit }: { id: string; action: CampaignAction; dryRunLimit?: number }) =>
+      dryRunLimit === undefined
+        ? api.post<{ campaign: Campaign }>(`/campaigns/${id}/${action}`)
+        : api.post<{ campaign: Campaign }>(`/campaigns/${id}/${action}`, { dryRunLimit }),
     onMutate: async ({ id, action }) => {
       await qc.cancelQueries({ queryKey: campaignKeys.all })
       await qc.cancelQueries({ queryKey: campaignKeys.detail(id) })
@@ -79,10 +89,80 @@ export function useCampaignAction() {
       ctx?.prevDetail.forEach(([key, data]) => qc.setQueryData(key, data))
       toast.error(errMsg(e))
     },
-    onSuccess: ({ campaign }, { action }) => {
+    onSuccess: ({ campaign }, { action, dryRunLimit }) => {
       patchCampaign(qc, campaign)
-      toast.success(action === 'start' ? 'Кампанит ажил эхэллээ' : 'Кампанит ажил түр зогслоо')
+      void qc.invalidateQueries({ queryKey: campaignKeys.stats(campaign.id) })
+      toast.success(action === 'pause' ? 'Кампанит ажил түр зогслоо'
+        : dryRunLimit ? `Туршилт эхэллээ: эхний ${dryRunLimit} дугаар` : 'Кампанит ажил эхэллээ')
     },
+  })
+}
+
+/** PUT /api/campaigns/{id}. */
+export function useUpdateCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: CampaignUpdateBody }) => api.put<{ campaign: Campaign }>(`/campaigns/${id}`, body),
+    onSuccess: ({ campaign }) => {
+      patchCampaign(qc, campaign)
+      toast.success('Тохиргоо хадгалагдлаа')
+    },
+    onError: (e) => toast.error(errMsg(e)),
+  })
+}
+
+/** GET /api/campaigns/{id}/stats (byStatus incl. skipped, byOutcome). Re-keyed by progress counters so live updates refetch. */
+export function useCampaignStats(campaign: Campaign | undefined) {
+  const id = campaign?.id
+  const version = campaign ? `${campaign.completed}/${campaign.failed}/${campaign.skipped ?? 0}/${campaign.status}` : ''
+  return useQuery({
+    queryKey: [...campaignKeys.stats(id ?? ''), version],
+    queryFn: () => api.get<CampaignStats>(`/campaigns/${id}/stats`),
+    enabled: !!id,
+    placeholderData: keepPreviousData,
+    refetchInterval: campaign?.status === 'running' ? 10_000 : false,
+  })
+}
+
+/** POST /api/campaigns/preview (multipart) — backend parses CSV and Excel. */
+export function useCampaignPreview() {
+  return useMutation({
+    mutationKey: campaignKeys.preview,
+    mutationFn: (file: File) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      return api.post<CampaignPreview>('/campaigns/preview', fd)
+    },
+  })
+}
+
+function filenameFrom(res: Response, fallback: string): string {
+  const cd = res.headers?.get?.('Content-Disposition') ?? ''
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd)
+  if (m) { try { return decodeURIComponent(m[1]) } catch { return m[1] } }
+  return fallback
+}
+
+/** Downloads GET /api/campaigns/{id}/export.xlsx with the bearer token (a plain link cannot send it). */
+export async function downloadCampaignExport(id: string, name: string): Promise<void> {
+  const token = getToken()
+  const res = await fetch(`/api/campaigns/${id}/export.xlsx`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  if (!res.ok) throw new Error(res.status === 404 ? 'Кампанит ажил олдсонгүй' : 'Excel татаж чадсангүй')
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filenameFrom(res, `${name.trim() || 'campaign'}.xlsx`)
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+export function useExportCampaign() {
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => downloadCampaignExport(id, name),
+    onError: (e) => toast.error(errMsg(e)),
   })
 }
 
@@ -127,6 +207,7 @@ export function useCampaignLive(campaignId?: string) {
           timer = setTimeout(() => {
             timer = null
             void qc.invalidateQueries({ queryKey: campaignKeys.detail(campaignId) })
+            void qc.invalidateQueries({ queryKey: campaignKeys.stats(campaignId) })
           }, 1000)
         }
       }

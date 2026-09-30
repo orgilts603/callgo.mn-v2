@@ -1,5 +1,5 @@
 import { Navigate, NavLink, useParams } from 'react-router-dom'
-import { Bot, Building2, Cpu, Phone } from 'lucide-react'
+import { Ban, Bot, Building2, Cpu, Phone } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { PageHeader } from '@/components/ui'
 import { cn } from '@/lib/utils'
@@ -7,12 +7,14 @@ import SIPNumbersTab from './SIPNumbersTab'
 import AgentProfilesTab from './AgentProfilesTab'
 import LLMConfigsTab from './LLMConfigsTab'
 import OrganizationTab from './OrganizationTab'
+import DoNotCallTab from './DoNotCallTab'
 
 export const SETTINGS_TABS = [
   { id: 'sip-numbers', label: 'SIP дугаарууд', icon: Phone, Component: SIPNumbersTab },
   { id: 'agent-profiles', label: 'Агент профайл', icon: Bot, Component: AgentProfilesTab },
   { id: 'llm', label: 'LLM тохиргоо', icon: Cpu, Component: LLMConfigsTab },
   { id: 'organization', label: 'Байгууллага', icon: Building2, Component: OrganizationTab },
+  { id: 'dnc', label: 'Хориглосон дугаар', icon: Ban, Component: DoNotCallTab },
 ] as const satisfies readonly { id: string; label: string; icon: ComponentType<{ className?: string }>; Component: ComponentType }[]
 
 export default function SettingsPage() {

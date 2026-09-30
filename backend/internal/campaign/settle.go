@@ -35,24 +35,34 @@ type outcome struct {
 	// refund gives back the attempt counted when the call was created
 	// (outcomeRequeue).
 	refund bool
+	// setOutcome copies code / note onto CampaignTarget.Outcome /
+	// OutcomeNote (the structured result of the call).
+	setOutcome bool
+	code, note string
 }
 
-// outcomeFromCall derives the target outcome from a terminal call.
+// outcomeFromCall derives the target outcome from a terminal call, including
+// the structured outcome the AI chose.
 func outcomeFromCall(call *domain.Call) outcome {
+	code, note := callOutcome(call)
 	if call.Status == domain.StatusCompleted || call.Status == domain.StatusVoicemail || call.EndReason == "voicemail" {
-		return outcome{kind: outcomeDone, reason: call.EndReason}
+		return outcome{kind: outcomeDone, reason: call.EndReason, setOutcome: true, code: code, note: note}
 	}
 	reason := call.EndReason
 	if reason == "" {
 		reason = string(call.Status)
 	}
-	return outcome{kind: outcomeRetry, reason: reason, detail: reason}
+	return outcome{kind: outcomeRetry, reason: reason, detail: reason, setOutcome: true, code: code, note: note}
 }
 
 // settle applies an outcome to a target in "calling" state and updates the
 // campaign counters / status. The caller must hold stateMu and must own the
 // target (removed its slot or verified its state in the repository). It
 // returns the campaign as stored after the transition.
+//
+// A reached target (outcomeDone) whose structured outcome is a non-terminal
+// outcome of the campaign (e.g. "callback") is requeued after RetryBackoff
+// while attempts remain; unknown or empty outcomes count as terminal.
 func (e *Engine) settle(ctx context.Context, campaignID uuid.UUID, t *domain.CampaignTarget, o outcome) (*domain.Campaign, error) {
 	c, err := e.campaigns.GetCampaign(ctx, campaignID)
 	if err != nil {
@@ -65,8 +75,19 @@ func (e *Engine) settle(ctx context.Context, campaignID uuid.UUID, t *domain.Cam
 	if detail == "" {
 		detail = o.reason
 	}
+	if o.setOutcome {
+		t.Outcome, t.OutcomeNote = o.code, o.note
+	}
 	switch o.kind {
 	case outcomeDone:
+		if oc, ok := findOutcome(c.Outcomes, t.Outcome); ok && o.setOutcome && !oc.Terminal &&
+			t.Attempts < max(c.MaxAttempts, 1) {
+			t.Status = domain.TargetPending
+			next := now.Add(e.opts.RetryBackoff)
+			t.NextTryAt = &next
+			t.LastError = ""
+			break
+		}
 		t.Status = domain.TargetDone
 		t.NextTryAt = nil
 		t.LastError = ""
@@ -100,15 +121,7 @@ func (e *Engine) settle(ctx context.Context, campaignID uuid.UUID, t *domain.Cam
 	if !final {
 		return c, nil
 	}
-	if c.Completed+c.Failed >= c.Total && (c.Status == domain.CampaignRunning || c.Status == domain.CampaignPaused) {
-		open, err := e.hasOpenTargets(ctx, c.ID)
-		if err != nil {
-			e.log.Warn().Err(err).Str("campaignId", c.ID.String()).Msg("check campaign completion")
-		} else if !open {
-			c.Status = domain.CampaignCompleted
-			e.log.Info().Str("campaignId", c.ID.String()).Msg("campaign completed")
-		}
-	}
+	e.completeIfDone(ctx, c)
 	c.UpdatedAt = now
 	if err := e.campaigns.UpdateCampaign(ctx, c); err != nil {
 		return nil, fmt.Errorf("update campaign: %w", err)
@@ -264,7 +277,7 @@ func (e *Engine) maybeSync(ctx context.Context, campaignID uuid.UUID) {
 
 func (e *Engine) syncCampaign(ctx context.Context, campaignID uuid.UUID) error {
 	e.stateMu.Lock()
-	var total, done, failed, open int
+	var total, done, failed, skipped, open int
 	err := e.scanTargets(ctx, campaignID, func(t *domain.CampaignTarget) bool {
 		total++
 		switch t.Status {
@@ -272,6 +285,8 @@ func (e *Engine) syncCampaign(ctx context.Context, campaignID uuid.UUID) error {
 			done++
 		case domain.TargetFailed:
 			failed++
+		case domain.TargetSkipped:
+			skipped++
 		default:
 			open++
 		}
@@ -286,8 +301,8 @@ func (e *Engine) syncCampaign(ctx context.Context, campaignID uuid.UUID) error {
 		e.stateMu.Unlock()
 		return fmt.Errorf("get campaign: %w", err)
 	}
-	changed := c.Total != total || c.Completed != done || c.Failed != failed
-	c.Total, c.Completed, c.Failed = total, done, failed
+	changed := c.Total != total || c.Completed != done || c.Failed != failed || c.Skipped != skipped
+	c.Total, c.Completed, c.Failed, c.Skipped = total, done, failed, skipped
 	if open == 0 && total > 0 && (c.Status == domain.CampaignRunning || c.Status == domain.CampaignPaused) {
 		c.Status = domain.CampaignCompleted
 		changed = true

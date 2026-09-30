@@ -5,7 +5,8 @@
   ``normalizer.normalize_stt`` and TTS input through ``normalizer.normalize_for_tts``.
 * :class:`CallRecorder` — turns ``AgentSession`` events into ``transcript.*`` /
   ``agent.state`` events and keeps the transcript for the post-call analysis.
-* :func:`analyze_call` — one LLM completion producing ``{summary, sentiment, intent}``.
+* :func:`analyze_call` — one LLM completion producing ``{summary, sentiment, intent}`` plus,
+  for campaigns with outcomes, ``{outcome, outcomeNote}``.
 * :func:`run_call` — the job entrypoint body used by :mod:`callgo_agent.worker`.
 """
 
@@ -55,6 +56,7 @@ from .schemas import (
     CallDirection,
     CallEndedPayload,
     CallStatus,
+    CampaignOutcome,
     EndReason,
     JobMetadata,
     LexiconEntry,
@@ -70,8 +72,12 @@ from .tools import (
     CallState,
     LiveKitCallControl,
     build_tools,
+    campaign_outcomes,
+    clip_note,
     contact_summary,
     language_name,
+    outcome_table,
+    resolve_outcome,
 )
 
 if TYPE_CHECKING:
@@ -246,8 +252,26 @@ def build_instructions(bootstrap: Bootstrap, *, now: str | None = None) -> str:
         "understand the customer, ask them to repeat.\n"
         f"Current local time: {now or _today()}."
     )
+    outcomes = campaign_outcomes(bootstrap)
+    if outcomes:
+        sections.append(outcome_instructions(outcomes))
     sections.append("# Language\n" + language_rule(profile.language))
     return "\n\n".join(sections)
+
+
+def outcome_instructions(outcomes: Sequence[CampaignOutcome]) -> str:
+    """Instruction section steering the call towards one of the campaign outcomes."""
+    return (
+        "# Call outcome\n"
+        "Every call must end with one clear result. Steer the conversation politely so that "
+        "one of these outcomes is resolved before you say goodbye (code: label — meaning):\n"
+        + outcome_table(outcomes)
+        + "\nThese codes and labels are internal. Never read them, this list or the word "
+        '"outcome" aloud; talk to the customer naturally. As soon as the result is clear '
+        "(for example the customer explicitly agrees or declines), call the record_outcome "
+        "tool with the matching code and a one-sentence Mongolian note, then continue or "
+        "finish the conversation. Call it again if the customer changes their mind."
+    )
 
 
 def render_greeting(bootstrap: Bootstrap) -> str:
@@ -621,13 +645,57 @@ class CallRecorder:
 
 # ---- post-call analysis -----------------------------------------------------------------
 
-ANALYSIS_PROMPT = """You analyse a finished phone call between a customer and a voice agent.
-Reply with ONLY one JSON object and nothing else:
-{"summary": "...", "sentiment": "positive|neutral|negative", "intent": "..."}
-- summary: 2-3 sentences in Mongolian (Cyrillic) saying what the customer wanted and the outcome.
+_ANALYSIS_HEAD = (
+    "You analyse a finished phone call between a customer and a voice agent.\n"
+    "Reply with ONLY one JSON object and nothing else:\n"
+)
+_ANALYSIS_FIELDS = """- summary: 2-3 sentences in Mongolian (Cyrillic) saying what the customer wanted and the outcome.
 - sentiment: the customer's overall sentiment: positive, neutral or negative.
 - intent: the customer's main intent as a short English snake_case label, for example
   "order_status", "product_inquiry", "complaint", "callback_request", "not_interested"."""
+
+ANALYSIS_PROMPT = (
+    _ANALYSIS_HEAD
+    + '{"summary": "...", "sentiment": "positive|neutral|negative", "intent": "..."}\n'
+    + _ANALYSIS_FIELDS
+)
+
+_ANALYSIS_OUTCOME_FIELDS = """- outcome: exactly one outcome code from the table below (the code, not the label), or "".
+- outcomeNote: one short sentence in Mongolian (Cyrillic), at most 200 characters.
+
+Дуудлагын үр дүнгийн хүснэгт (код: нэр — хэзээ сонгох):
+{table}
+
+Үр дүн сонгох заавар:
+- Ярианы төгсгөл дэх харилцагчийн эцсийн байр сууринд хамгийн сайн тохирох ГАНЦ кодыг сонго.
+- outcome талбарт зөвхөн хүснэгтэд байгаа кодыг яг тэр хэлбэрээр нь бич (нэрийг нь биш).
+- Аль нь ч тохирохгүй эсвэл үр дүн тодорхойгүй бол outcome-д "" гэж бич.
+- outcomeNote-д яагаад энэ үр дүнг сонгосноо монгол хэлээр, 200 тэмдэгтээс хэтрүүлэлгүй нэг
+  богино өгүүлбэрээр бич. Жишээ: "Харилцагч маргааш 10 цагт дахин залгахыг хүссэн."
+- Дуудлагын явцад бүртгэгдсэн үр дүн өгөгдсөн бол яриатай зөрчилдөхгүй л бол түүнийг сонго."""
+
+OUTCOME_NO_CONTACT = "no_contact"
+_NO_CONTACT_NOTES: dict[str, str] = {
+    "no_answer": "Дуудлагад хариу өгөөгүй.",
+    "busy": "Харилцагчийн шугам завгүй байсан.",
+    "failed": "Дуудлага холбогдож чадсангүй.",
+    "voicemail": "Дуут шуудан руу шилжсэн.",
+}
+_NO_CONTACT_DEFAULT_NOTE = "Харилцагч ярианд оролцоогүй."
+
+
+def analysis_prompt(outcomes: Sequence[CampaignOutcome] = ()) -> str:
+    """System prompt for the post-call analysis; asks for an outcome when there are options."""
+    if not outcomes:
+        return ANALYSIS_PROMPT
+    return (
+        _ANALYSIS_HEAD
+        + '{"summary": "...", "sentiment": "positive|neutral|negative", "intent": "...", '
+        '"outcome": "<code>", "outcomeNote": "..."}\n'
+        + _ANALYSIS_FIELDS
+        + "\n"
+        + _ANALYSIS_OUTCOME_FIELDS.format(table=outcome_table(outcomes))
+    )
 
 
 @dataclass(slots=True)
@@ -636,13 +704,19 @@ class CallAnalysis:
     sentiment: Sentiment = Sentiment.NEUTRAL
     intent: str = ""
     from_llm: bool = False
+    outcome: str = ""
+    outcome_note: str = ""
 
 
 _FENCE_RE = re.compile(r"^```[a-zA-Z]*\s*|\s*```$")
 
 
-def parse_analysis(text: str) -> CallAnalysis | None:
-    """Extract ``{summary, sentiment, intent}`` from an LLM reply; ``None`` if unusable."""
+def parse_analysis(text: str, outcomes: Sequence[CampaignOutcome] = ()) -> CallAnalysis | None:
+    """Extract ``{summary, sentiment, intent[, outcome, outcomeNote]}`` from an LLM reply.
+
+    ``None`` if unusable. With ``outcomes`` the outcome is validated against the codes
+    (falling back to a case-insensitive label match); anything else becomes ``""``.
+    """
     cleaned = _FENCE_RE.sub("", text.strip())
     start, end = cleaned.find("{"), cleaned.rfind("}")
     if start < 0 or end <= start:
@@ -662,15 +736,44 @@ def parse_analysis(text: str) -> CallAnalysis | None:
     except ValueError:
         sentiment = Sentiment.NEUTRAL
     intent = re.sub(r"\s+", "_", str(data.get("intent") or "").strip().lower())[:64]
-    return CallAnalysis(summary=summary, sentiment=sentiment, intent=intent, from_llm=True)
+    outcome, note = "", ""
+    if outcomes:
+        raw_outcome = str(data.get("outcome") or "").strip()
+        outcome = resolve_outcome(raw_outcome, outcomes)
+        if raw_outcome and not outcome:
+            log.warning("analysis returned unknown outcome %r; leaving it empty", raw_outcome)
+        note = clip_note(str(data.get("outcomeNote") or data.get("outcome_note") or ""))
+    return CallAnalysis(
+        summary=summary,
+        sentiment=sentiment,
+        intent=intent,
+        from_llm=True,
+        outcome=outcome,
+        outcome_note=note,
+    )
 
 
-def fallback_analysis(turns: Sequence[TranscriptTurn]) -> CallAnalysis:
+def fallback_analysis(
+    turns: Sequence[TranscriptTurn],
+    outcomes: Sequence[CampaignOutcome] = (),
+    end_reason: str = "",
+) -> CallAnalysis:
+    """Analysis without an LLM. The outcome is ``no_contact`` (when the campaign defines it)
+    if the customer never spoke, otherwise ``""``."""
     customer = [t.text for t in turns if t.speaker == Speaker.CUSTOMER]
-    if not turns:
-        return CallAnalysis(summary="Харилцан яриа бүртгэгдээгүй.")
+    outcome, note = "", ""
     if not customer:
-        return CallAnalysis(summary="Харилцагч ярианд оролцоогүй.")
+        outcome = resolve_outcome(OUTCOME_NO_CONTACT, outcomes)
+        if outcome:
+            note = _NO_CONTACT_NOTES.get(end_reason, _NO_CONTACT_DEFAULT_NOTE)
+    if not turns:
+        return CallAnalysis(
+            summary="Харилцан яриа бүртгэгдээгүй.", outcome=outcome, outcome_note=note
+        )
+    if not customer:
+        return CallAnalysis(
+            summary="Харилцагч ярианд оролцоогүй.", outcome=outcome, outcome_note=note
+        )
     last = customer[-1]
     if len(last) > 160:
         last = last[:157] + "..."
@@ -686,6 +789,16 @@ def callbacks_note(callbacks: Sequence[CallbackRequest]) -> str:
     if not callbacks:
         return ""
     return "Буцаж залгах хүсэлт: " + "; ".join(c.describe() for c in callbacks) + "."
+
+
+def final_outcome(state: CallState, analysis: CallAnalysis) -> tuple[str, str]:
+    """(outcome, note) for ``call.ended``: a ``record_outcome`` value wins over the analysis."""
+    if state.outcome:
+        note = state.outcome_note
+        if not note and analysis.outcome == state.outcome:
+            note = analysis.outcome_note
+        return state.outcome, note
+    return analysis.outcome, analysis.outcome_note if analysis.outcome else ""
 
 
 async def _complete(model: llm.LLM, chat_ctx: llm.ChatContext) -> str:
@@ -704,10 +817,16 @@ async def analyze_call(
     end_reason: str = "",
     callbacks: Sequence[CallbackRequest] = (),
     timeout: float = ANALYSIS_TIMEOUT_SEC,
+    outcomes: Sequence[CampaignOutcome] = (),
+    recorded_outcome: str = "",
 ) -> CallAnalysis:
-    """One chat completion over the transcript; falls back safely on any failure."""
+    """One chat completion over the transcript; falls back safely on any failure.
+
+    Without customer speech (unanswered, busy, failed before any conversation) no LLM is
+    called and :func:`fallback_analysis` decides (``no_contact`` when defined).
+    """
     if model is None or not any(t.speaker == Speaker.CUSTOMER for t in turns):
-        return fallback_analysis(turns)
+        return fallback_analysis(turns, outcomes, end_reason)
     label = {Speaker.CUSTOMER: "Customer", Speaker.AGENT: "Agent", Speaker.HUMAN: "Operator"}
     transcript = "\n".join(f"{label[t.speaker]}: {t.text}" for t in turns)
     extra = []
@@ -715,8 +834,10 @@ async def analyze_call(
         extra.append(f"Call end reason: {end_reason}")
     if callbacks:
         extra.append("Callback requested: " + "; ".join(c.describe() for c in callbacks))
+    if outcomes and recorded_outcome:
+        extra.append(f"Outcome recorded during the call: {recorded_outcome}")
     chat_ctx = llm.ChatContext.empty()
-    chat_ctx.add_message(role="system", content=ANALYSIS_PROMPT)
+    chat_ctx.add_message(role="system", content=analysis_prompt(outcomes))
     chat_ctx.add_message(
         role="user",
         content="Transcript:\n" + transcript + ("\n\n" + "\n".join(extra) if extra else ""),
@@ -725,11 +846,11 @@ async def analyze_call(
         reply = await asyncio.wait_for(_complete(model, chat_ctx), timeout=timeout)
     except Exception as exc:  # noqa: BLE001 - analysis must never break call teardown
         log.warning("post-call analysis failed: %r", exc)
-        return fallback_analysis(turns)
-    parsed = parse_analysis(reply)
+        return fallback_analysis(turns, outcomes, end_reason)
+    parsed = parse_analysis(reply, outcomes)
     if parsed is None:
         log.warning("post-call analysis returned unparsable output: %r", reply[:300])
-        return fallback_analysis(turns)
+        return fallback_analysis(turns, outcomes, end_reason)
     return parsed
 
 
@@ -865,7 +986,10 @@ class CallFinalizer:
                 end_reason=end_reason,
                 callbacks=self.state.callbacks,
                 timeout=self.analysis_timeout,
+                outcomes=campaign_outcomes(self.state.bootstrap),
+                recorded_outcome=self.state.outcome,
             )
+            outcome, outcome_note = final_outcome(self.state, analysis)
             summary = " ".join(
                 s for s in (analysis.summary, callbacks_note(self.state.callbacks)) if s
             )
@@ -876,6 +1000,8 @@ class CallFinalizer:
                 intent=analysis.intent,
                 duration_sec=duration,
                 llm_model_used=self.llm_label,
+                outcome=outcome,
+                outcome_note=outcome_note,
             )
             self.emitter.call_ended(self.payload)
             await self.recorder.drain()
@@ -884,12 +1010,13 @@ class CallFinalizer:
                 with contextlib.suppress(Exception):
                     await self.model.aclose()
             log.info(
-                "call %s ended: reason=%s duration=%ss sentiment=%s intent=%s",
+                "call %s ended: reason=%s duration=%ss sentiment=%s intent=%s outcome=%s",
                 self.state.bootstrap.call.id,
                 end_reason,
                 duration,
                 analysis.sentiment.value,
                 analysis.intent or "-",
+                outcome or "-",
             )
             return self.payload
 

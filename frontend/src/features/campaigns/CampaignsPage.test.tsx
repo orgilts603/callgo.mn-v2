@@ -9,6 +9,11 @@ import { CampaignsPage } from './CampaignsPage'
 const base = { orgId: 'o', script: '', maxAttempts: 2, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }
 const campaigns = [
   { ...base, id: 'c1', name: 'Хураамж', status: 'running', sipNumberId: 'sip-1', agentProfileId: 'ap-1', concurrency: 5, total: 20, completed: 8, failed: 2 },
+  {
+    ...base, id: 'c3', name: 'Туршилтын', status: 'paused', sipNumberId: null, agentProfileId: null, concurrency: 1, total: 10, completed: 2, failed: 1,
+    skipped: 3, dryRunLimit: 5, dryRunDialed: 5, outcomes: [],
+    schedule: { timezone: 'Asia/Ulaanbaatar', weekdays: [1, 2, 3, 4, 5], startTime: '09:00', endTime: '18:00', pacePerMinute: 10 },
+  },
   { ...base, id: 'c2', name: 'Санал асуулга', status: 'draft', sipNumberId: null, agentProfileId: null, concurrency: 2, total: 0, completed: 0, failed: 0 },
 ] as unknown as Campaign[]
 
@@ -44,5 +49,18 @@ describe('CampaignsPage', () => {
     expect(within(draft).getByRole('button', { name: /Эхлүүлэх/ })).toBeInTheDocument()
     expect(within(draft).getByRole('button', { name: 'Устгах' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Шинэ кампанит ажил/ })).toBeInTheDocument()
+  })
+
+  it('shows skipped in the progress tooltip, the dry-run badge and the schedule chip', async () => {
+    mockApi()
+    renderPage()
+    const row = (await screen.findByText('Туршилтын')).closest('tr')!
+    expect(within(row).getByText('Туршилт')).toBeInTheDocument()
+    expect(within(row).getByTestId('schedule-chip')).toHaveTextContent('Да–Ба 09:00–18:00')
+    expect(within(row).getByTitle(/Алгассан 3/)).toBeInTheDocument()
+    expect(within(row).getByTestId('progress-skipped')).toBeInTheDocument()
+    const plain = screen.getByText('Хураамж').closest('tr')!
+    expect(within(plain).queryByText('Туршилт')).toBeNull()
+    expect(within(plain).queryByTestId('schedule-chip')).toBeNull()
   })
 })

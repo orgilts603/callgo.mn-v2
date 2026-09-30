@@ -196,7 +196,21 @@ async def test_payload_shapes() -> None:
         "intent": "order_status",
         "durationSec": 61,
         "llmModelUsed": "openai/gpt-4o-mini",
+        "outcome": "",
+        "outcomeNote": "",
     }
+
+    campaign_ended = em.call_ended(
+        CallEndedPayload(
+            end_reason="hangup_agent",
+            summary="Зөвшөөрсөн",
+            outcome="agreed",
+            outcome_note="Харилцагч санал болголтыг хүлээж авсан.",
+        )
+    )
+    assert campaign_ended is not None
+    assert campaign_ended.payload["outcome"] == "agreed"
+    assert campaign_ended.payload["outcomeNote"] == "Харилцагч санал болголтыг хүлээж авсан."
 
     call = Call(
         id=CALL,

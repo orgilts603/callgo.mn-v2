@@ -419,8 +419,10 @@ func TestPreview(t *testing.T) {
 	assert.Equal(t, []string{"Утас", "Нэр", "Таг", "Хот"}, p.Columns)
 	assert.Equal(t, [][]string{
 		{"99112233", "Бат", "vip", "УБ"},
-		{"88112233", "Сараа"},
+		{"88112233", "Сараа", "", ""},
 	}, p.Rows)
+	assert.Equal(t, 3, p.Total)
+	assert.Equal(t, FormatCSV, p.Format)
 	assert.Equal(t, map[string]string{
 		"Утас": FieldPhone, "Нэр": FieldName, "Таг": FieldTags, "Хот": FieldExtra,
 	}, p.Mapping)

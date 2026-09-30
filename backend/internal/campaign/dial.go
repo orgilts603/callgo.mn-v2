@@ -97,7 +97,10 @@ func (e *Engine) runTarget(ctx context.Context, c domain.Campaign, sip domain.SI
 		detail = reason
 	}
 	log.Info().Str("status", reason).Str("detail", detail).Msg("campaign call not answered")
-	e.finishUnanswered(wctx, c.ID, t.ID, call, status, outcome{kind: outcomeRetry, reason: reason, detail: detail})
+	e.finishUnanswered(wctx, c.ID, t.ID, call, status, outcome{
+		kind: outcomeRetry, reason: reason, detail: detail,
+		setOutcome: true, code: noContactCode(c.Outcomes),
+	})
 }
 
 // prepareCall resolves the contact, creates the Call row (queued), links it
@@ -246,6 +249,9 @@ func (e *Engine) finishUnanswered(ctx context.Context, campaignID, targetID uuid
 		}
 	} else {
 		e.closeCall(call, status, string(status))
+		if o.setOutcome {
+			setCallOutcome(call, o.code, o.note)
+		}
 		if err := e.calls.UpdateCall(ctx, call); err != nil {
 			e.log.Error().Err(err).Str("callId", call.ID.String()).Msg("finalize unanswered call")
 		}

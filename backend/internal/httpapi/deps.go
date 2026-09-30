@@ -24,6 +24,9 @@ type Deps struct {
 	Contact      domain.ContactRepository
 	Campaign     domain.CampaignRepository
 	Lexicon      domain.LexiconRepository
+	// DNC is the do-not-call list. When nil the /api/dnc endpoints answer
+	// "not configured" and dialing / campaign import skip the check.
+	DNC domain.DoNotCallRepository
 
 	Telephony domain.Telephony
 	Bus       domain.EventBus
@@ -41,6 +44,10 @@ type Deps struct {
 	// CampaignDeleter removes campaigns for DELETE /api/campaigns/{id}. When
 	// nil, Campaign is type-asserted to CampaignDeleter.
 	CampaignDeleter CampaignDeleter
+	// CampaignStats counts targets for GET /api/campaigns/{id}/stats. When
+	// nil, Campaign is type-asserted to CampaignStats; failing that the
+	// counts are computed from ListAllTargets.
+	CampaignStats CampaignStats
 	// Ready is an optional readiness probe (e.g. DB ping) for /readyz.
 	Ready func(ctx context.Context) error
 }
@@ -68,7 +75,11 @@ type LiveHub interface {
 
 // CampaignController drives the outbound dialer engine.
 type CampaignController interface {
-	Start(ctx context.Context, campaignID uuid.UUID) error
+	// Start runs the campaign. dryRunLimit > 0 dials only that many targets
+	// and then pauses the campaign; 0 is a full run. The HTTP layer passes
+	// the start request's dryRunLimit, or the campaign's stored DryRunLimit
+	// when the request has none.
+	Start(ctx context.Context, campaignID uuid.UUID, dryRunLimit int) error
 	Pause(ctx context.Context, campaignID uuid.UUID) error
 	OnCallEnded(ctx context.Context, call *domain.Call)
 }
@@ -93,14 +104,43 @@ type ParsedContacts struct {
 	Errors   []RowError
 }
 
-// TargetParser parses a campaign target CSV (columns phone, name, extra → vars).
-type TargetParser interface {
-	ParseTargets(r io.Reader) (ParsedTargets, error)
+// PreviewResult is the head of an uploaded list for the column-mapping UI.
+type PreviewResult struct {
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows"`
+	// Mapping maps each header to "phone", "name", "tags" or "var".
+	Mapping map[string]string `json:"mapping"`
+	// Total is the number of data rows in the file.
+	Total int `json:"total"`
+	// Format is "csv" or "xlsx".
+	Format string `json:"format"`
 }
 
-// ContactParser parses a contacts CSV.
+// TargetParser parses a campaign target list (CSV or Excel; columns phone,
+// name, extra → vars). filename is the uploaded file name, used with the
+// content to detect the format.
+type TargetParser interface {
+	ParseTargets(r io.Reader, filename string) (ParsedTargets, error)
+	// Preview returns the header, up to n rows and the detected mapping.
+	Preview(r io.Reader, filename string, n int) (PreviewResult, error)
+}
+
+// ContactParser parses a contact list (CSV or Excel).
 type ContactParser interface {
-	ParseContacts(r io.Reader) (ParsedContacts, error)
+	ParseContacts(r io.Reader, filename string) (ParsedContacts, error)
+}
+
+// CampaignStats counts a campaign's targets in the database.
+type CampaignStats interface {
+	CountTargetsByStatus(ctx context.Context, campaignID uuid.UUID) (map[domain.CampaignTargetStatus]int, error)
+	CountTargetsByOutcome(ctx context.Context, campaignID uuid.UUID) (map[string]int, error)
+}
+
+// DNCInserter is an optional extension of domain.DoNotCallRepository that
+// reports whether an entry was created (true) or already existed (false, e
+// then holds the existing entry). Used to answer 201 vs 200.
+type DNCInserter interface {
+	InsertDoNotCall(ctx context.Context, e *domain.DoNotCallEntry) (bool, error)
 }
 
 // LexiconHit is one correction applied by the lexicon engine.

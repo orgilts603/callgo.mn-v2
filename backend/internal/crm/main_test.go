@@ -70,7 +70,7 @@ func setup(t *testing.T) (context.Context, *Store) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
 	_, err := testPool.Exec(ctx, `TRUNCATE organizations, users, llm_configs, agent_profiles, sip_numbers,
-		contacts, calls, call_transcripts, campaigns, campaign_targets, lexicon_corrections CASCADE`)
+		contacts, calls, call_transcripts, campaigns, campaign_targets, lexicon_corrections, do_not_call CASCADE`)
 	require.NoError(t, err)
 	return ctx, testStore
 }

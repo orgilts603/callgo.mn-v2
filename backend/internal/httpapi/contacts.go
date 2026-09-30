@@ -133,42 +133,46 @@ func (s *server) deleteContact(w http.ResponseWriter, r *http.Request) {
 	noContent(w)
 }
 
-// multipartFile parses the multipart form and opens the "file" part.
-func multipartFile(w http.ResponseWriter, r *http.Request, required bool) (multipart.File, error) {
+// multipartFile parses the multipart form and opens the "file" part. It also
+// returns the uploaded file name (used to detect CSV vs Excel).
+func multipartFile(w http.ResponseWriter, r *http.Request, required bool) (multipart.File, string, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxMultipartBody)
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
-		return nil, errInvalid("expected multipart/form-data: %v", err)
+		return nil, "", errInvalid("expected multipart/form-data: %v", err)
 	}
-	f, _, err := r.FormFile("file")
+	f, hdr, err := r.FormFile("file")
 	if err != nil {
 		if required || !errors.Is(err, http.ErrMissingFile) {
-			return nil, errInvalid("file is required")
+			return nil, "", errInvalid("file is required")
 		}
-		return nil, nil
+		return nil, "", nil
 	}
-	return f, nil
+	return f, hdr.Filename, nil
 }
 
 type importResult struct {
 	Imported int        `json:"imported"`
 	Skipped  int        `json:"skipped"`
 	Errors   []RowError `json:"errors"`
+	// DoNotCall counts campaign targets skipped because they are on the
+	// do-not-call list (included in Skipped).
+	DoNotCall int `json:"doNotCall,omitempty"`
 }
 
 func (s *server) importContacts(w http.ResponseWriter, r *http.Request) {
 	if s.d.ContactParser == nil {
-		s.writeErr(w, r, errNotConfigured("contact CSV parser"))
+		s.writeErr(w, r, errNotConfigured("contact list parser"))
 		return
 	}
-	f, err := multipartFile(w, r, true)
+	f, filename, err := multipartFile(w, r, true)
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
 	}
 	defer f.Close()
-	parsed, err := s.d.ContactParser.ParseContacts(io.Reader(f))
+	parsed, err := s.d.ContactParser.ParseContacts(io.Reader(f), filename)
 	if err != nil {
-		s.writeErr(w, r, errInvalid("could not parse CSV: %v", err))
+		s.writeErr(w, r, parseErr(err))
 		return
 	}
 	ctx := r.Context()
@@ -202,4 +206,13 @@ func (s *server) importContacts(w http.ResponseWriter, r *http.Request) {
 		res.Imported++
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+// parseErr reports a list-parsing failure as 400 with the parser's message.
+func parseErr(err error) error {
+	var ae *apiError
+	if errors.As(err, &ae) {
+		return err
+	}
+	return errInvalid("could not parse file: %v", strings.TrimPrefix(err.Error(), domain.ErrInvalid.Error()+": "))
 }

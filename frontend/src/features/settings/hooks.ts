@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { AgentProfile, LLMCatalogEntry, LLMConfig, LLMProvider, Organization, SIPNumber, User } from '@/lib/types'
+import type { AgentProfile, DoNotCallEntry, LLMCatalogEntry, LLMConfig, LLMProvider, Organization, SIPNumber, User } from '@/lib/types'
 
 const KEYS = {
   sip: ['settings', 'sip-numbers'] as const,
@@ -97,4 +97,41 @@ export function useTestLLMConfig() {
 // ---- Me ----
 export function useMe() {
   return useQuery({ queryKey: KEYS.me, queryFn: () => api.get<{ user: User; org: Organization }>('/auth/me') })
+}
+
+// ---- Do-not-call list ----
+export const dncKey = ['settings', 'dnc'] as const
+export interface DNCImportResult { imported: number; skipped: number; errors: { row: number; message: string }[] | null }
+
+export function useDNC(params: { q: string; limit: number; offset: number }) {
+  return useQuery({
+    queryKey: [...dncKey, params] as const,
+    queryFn: () => api.get<{ items: DoNotCallEntry[]; total: number }>('/dnc', params),
+    placeholderData: (prev) => prev,
+  })
+}
+export function useAddDNC() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { phone: string; reason?: string }) => api.post<{ entry: DoNotCallEntry }>('/dnc', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: dncKey }),
+  })
+}
+export function useDeleteDNC() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (phone: string) => api.delete(`/dnc/${encodeURIComponent(phone)}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: dncKey }),
+  })
+}
+export function useImportDNC() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      return api.post<DNCImportResult>('/dnc/import', fd)
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: dncKey }),
+  })
 }

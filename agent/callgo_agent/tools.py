@@ -4,6 +4,8 @@
 * ``transfer_call``     SIP REFER the caller to ``profile.transfer_number`` (``transferred``)
 * ``lookup_contact``    contact record + campaign variables as text
 * ``schedule_callback`` remember a requested callback; reported in the call summary
+* ``record_outcome``    commit the campaign outcome mid-call; auto-enabled (not via
+  ``profile.tools``) whenever the campaign defines outcomes
 
 Tools only touch :class:`CallState` (per-call mutable data shared with the session) and a
 :class:`CallControl` (hang-up / transfer), so they are testable without LiveKit.
@@ -22,7 +24,7 @@ from livekit.agents.llm import FunctionTool, StopResponse, ToolError, ToolFlag, 
 from livekit.agents.voice import RunContext
 
 from .events import utcnow
-from .schemas import Bootstrap, EndReason
+from .schemas import Bootstrap, CampaignOutcome, EndReason
 
 log = logging.getLogger("callgo.tools")
 
@@ -30,12 +32,17 @@ TOOL_END_CALL = "end_call"
 TOOL_TRANSFER_CALL = "transfer_call"
 TOOL_LOOKUP_CONTACT = "lookup_contact"
 TOOL_SCHEDULE_CALLBACK = "schedule_callback"
+TOOL_RECORD_OUTCOME = "record_outcome"
 ALL_TOOLS: tuple[str, ...] = (
     TOOL_END_CALL,
     TOOL_TRANSFER_CALL,
     TOOL_LOOKUP_CONTACT,
     TOOL_SCHEDULE_CALLBACK,
 )
+# Enabled by the campaign (outcomes defined), never by ``profile.tools``.
+AUTO_TOOLS: tuple[str, ...] = (TOOL_RECORD_OUTCOME,)
+
+OUTCOME_NOTE_MAX_CHARS = 200
 
 _LANGUAGE_NAMES = {"mn": "Mongolian", "en": "English", "ru": "Russian"}
 
@@ -54,6 +61,45 @@ class CallbackRequest:
         return f"{self.when} — {self.note}" if self.note else self.when
 
 
+def campaign_outcomes(bootstrap: Bootstrap) -> list[CampaignOutcome]:
+    """The campaign's outcome options with a usable code (empty for non-campaign calls)."""
+    campaign = bootstrap.campaign
+    if campaign is None:
+        return []
+    return [o for o in campaign.outcomes if o.code.strip()]
+
+
+def resolve_outcome(value: str, outcomes: Iterable[CampaignOutcome]) -> str:
+    """Map an LLM-provided outcome to one of the campaign codes; ``""`` if none matches.
+
+    Tries the exact code, then the code case-insensitively, then the label
+    case-insensitively (models sometimes answer with the human label).
+    """
+    options = [o for o in outcomes if o.code.strip()]
+    wanted = value.strip()
+    if not wanted or not options:
+        return ""
+    for o in options:
+        if o.code == wanted:
+            return o.code
+    folded = wanted.casefold()
+    for o in options:
+        if o.code.strip().casefold() == folded:
+            return o.code
+    for o in options:
+        if o.label.strip() and o.label.strip().casefold() == folded:
+            return o.code
+    return ""
+
+
+def clip_note(note: str, limit: int = OUTCOME_NOTE_MAX_CHARS) -> str:
+    """Collapse whitespace and cut to ``limit`` characters (ellipsis included)."""
+    text = " ".join(note.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
 @dataclass
 class CallState:
     """Mutable per-call context shared by the tools and the session runner."""
@@ -62,6 +108,10 @@ class CallState:
     end_reason: EndReason | None = None
     callbacks: list[CallbackRequest] = field(default_factory=list)
     transferred_to: str = ""
+    # Campaign outcome committed mid-call by ``record_outcome`` (code, or "" if none yet).
+    # It takes precedence over the post-call analysis.
+    outcome: str = ""
+    outcome_note: str = ""
 
     def set_end_reason(self, reason: EndReason) -> bool:
         """Record why the call ends; the first reason wins. Returns True if it was set."""
@@ -69,6 +119,18 @@ class CallState:
             self.end_reason = reason
             return True
         return False
+
+    @property
+    def outcomes(self) -> list[CampaignOutcome]:
+        return campaign_outcomes(self.bootstrap)
+
+    def record_outcome(self, value: str, note: str = "") -> str:
+        """Validate and store an outcome (latest call wins). Returns the code, ``""`` if unknown."""
+        code = resolve_outcome(value, self.outcomes)
+        if code:
+            self.outcome = code
+            self.outcome_note = clip_note(note)
+        return code
 
 
 class CallControl(Protocol):
@@ -223,18 +285,62 @@ def _build_schedule_callback(state: CallState) -> FunctionTool[Any, Any]:
     return schedule_callback
 
 
+def outcome_table(outcomes: Iterable[CampaignOutcome]) -> str:
+    """One ``- code: label — description`` line per outcome."""
+    lines = []
+    for o in outcomes:
+        line = f"- {o.code}: {o.label or o.code}"
+        if o.description.strip():
+            line += f" — {' '.join(o.description.split())}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _build_record_outcome(state: CallState) -> FunctionTool[Any, Any]:
+    outcomes = state.outcomes
+    codes = ", ".join(o.code for o in outcomes)
+    description = (
+        "Record the result of this call as soon as it is clear, for example when the "
+        "customer explicitly agrees, declines, asks to be called back later or says it is "
+        "the wrong number. You may call it again if the customer changes their mind; the "
+        "last value counts. This is internal bookkeeping: never read the codes or labels "
+        "aloud and do not tell the customer that you recorded anything.\n"
+        "Possible outcomes (code: label — when to use it):\n" + outcome_table(outcomes)
+    )
+
+    async def record_outcome(ctx: RunContext, outcome_code: str, note: str) -> str:
+        """Record the call outcome.
+
+        Args:
+            outcome_code: Exactly one of the outcome codes listed in the description.
+            note: One short sentence in Mongolian (max 200 characters) explaining the outcome.
+        """
+        code = state.record_outcome(outcome_code, note)
+        if not code:
+            log.warning("record_outcome with unknown code %r", outcome_code)
+            raise ToolError(f"Unknown outcome code {outcome_code!r}. Use one of: {codes}.")
+        log.info("outcome recorded by the LLM: %s (%s)", code, state.outcome_note or "-")
+        return (
+            f"Outcome '{code}' recorded. Do not mention it to the customer; continue the "
+            "conversation naturally, or say goodbye if it is finished."
+        )
+
+    return function_tool(record_outcome, name=TOOL_RECORD_OUTCOME, description=description)
+
+
 def build_tools(
     state: CallState,
     control: CallControl,
     enabled: Iterable[str] | None = None,
 ) -> list[FunctionTool[Any, Any]]:
-    """Tools listed in ``enabled`` (default: ``profile.tools``), in :data:`ALL_TOOLS` order.
+    """Tools listed in ``enabled`` (default: ``profile.tools``), in :data:`ALL_TOOLS` order,
+    plus ``record_outcome`` whenever the campaign defines outcomes.
 
     Unknown names are ignored; ``transfer_call`` is skipped when no transfer number is set.
     """
     profile = state.bootstrap.profile
     wanted = {t.strip() for t in (profile.tools if enabled is None else enabled) if t.strip()}
-    for unknown in sorted(wanted - set(ALL_TOOLS)):
+    for unknown in sorted(wanted - set(ALL_TOOLS) - set(AUTO_TOOLS)):
         log.warning("profile %s enables unknown tool %r; ignoring", profile.id, unknown)
 
     tools: list[FunctionTool[Any, Any]] = []
@@ -249,4 +355,6 @@ def build_tools(
         tools.append(_build_lookup_contact(state))
     if TOOL_SCHEDULE_CALLBACK in wanted:
         tools.append(_build_schedule_callback(state))
+    if state.outcomes:
+        tools.append(_build_record_outcome(state))
     return tools

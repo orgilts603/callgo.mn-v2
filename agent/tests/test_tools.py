@@ -16,6 +16,7 @@ from callgo_agent.schemas import (
     CallDirection,
     CallStatus,
     CampaignInfo,
+    CampaignOutcome,
     Contact,
     Organization,
 )
@@ -24,7 +25,9 @@ from callgo_agent.tools import (
     CallState,
     LiveKitCallControl,
     build_tools,
+    clip_note,
     contact_summary,
+    resolve_outcome,
 )
 
 ORG = UUID("11111111-1111-1111-1111-111111111111")
@@ -280,3 +283,89 @@ async def test_hangup_ignores_missing_room() -> None:
     err = lk_api.TwirpError(lk_api.TwirpErrorCode.NOT_FOUND, "room not found", status=404)
     control = LiveKitCallControl(_FakeAPI(room_error=err), "gone", "x")  # type: ignore[arg-type]
     await control.hangup()
+
+
+# ---- record_outcome ---------------------------------------------------------------------
+
+OUTCOMES = [
+    CampaignOutcome(code="agreed", label="Зөвшөөрсөн", description="Санал болголтыг авсан"),
+    CampaignOutcome(code="declined", label="Татгалзсан"),
+    CampaignOutcome(code="callback", label="Дахин залгах", terminal=False),
+    CampaignOutcome(code="  ", label="broken"),  # unusable code, ignored
+]
+OUTCOME_CAMPAIGN = CampaignInfo(id=UUID(int=8), name="Autumn", outcomes=OUTCOMES)
+
+
+def test_resolve_outcome_and_clip_note() -> None:
+    assert resolve_outcome("agreed", OUTCOMES) == "agreed"
+    assert resolve_outcome(" Agreed ", OUTCOMES) == "agreed"
+    assert resolve_outcome("татгалзсан", OUTCOMES) == "declined"
+    assert resolve_outcome("ДАХИН ЗАЛГАХ", OUTCOMES) == "callback"
+    assert resolve_outcome("broken", OUTCOMES) == ""
+    assert resolve_outcome("nope", OUTCOMES) == ""
+    assert resolve_outcome("", OUTCOMES) == ""
+    assert resolve_outcome("agreed", []) == ""
+    assert clip_note("  a \n b  ") == "a b"
+    clipped = clip_note("x" * 300)
+    assert len(clipped) == 200 and clipped.endswith("…")
+
+
+def test_record_outcome_auto_enabled_with_campaign_outcomes() -> None:
+    state = CallState(bootstrap=make_bootstrap(tools=["end_call"], campaign=OUTCOME_CAMPAIGN))
+    tools = build_tools(state, FakeControl())
+    assert names(tools) == ["end_call", "record_outcome"]
+    assert state.outcomes == OUTCOMES[:3]
+
+    # also with no profile tools / an explicit list, but never without outcomes
+    assert names(build_tools(state, FakeControl(), enabled=[])) == ["record_outcome"]
+    no_outcomes = CampaignInfo(id=UUID(int=8), name="Autumn")
+    for boot in (
+        make_bootstrap(tools=["record_outcome"]),
+        make_bootstrap(tools=["record_outcome"], campaign=no_outcomes),
+    ):
+        assert build_tools(CallState(bootstrap=boot), FakeControl()) == []
+
+
+def test_record_outcome_profile_listing_is_not_unknown(caplog: pytest.LogCaptureFixture) -> None:
+    state = CallState(bootstrap=make_bootstrap(tools=["record_outcome"]))
+    build_tools(state, FakeControl())
+    assert "unknown tool" not in caplog.text
+
+
+def test_record_outcome_schema_lists_codes() -> None:
+    state = CallState(bootstrap=make_bootstrap(campaign=OUTCOME_CAMPAIGN))
+    tool = build_tools(state, FakeControl())[0]
+    schema = build_legacy_openai_schema(tool)["function"]
+    assert schema["name"] == "record_outcome"
+    assert set(schema["parameters"]["properties"]) == {"outcome_code", "note"}
+    assert set(schema["parameters"]["required"]) == {"outcome_code", "note"}
+    assert "- agreed: Зөвшөөрсөн — Санал болголтыг авсан" in schema["description"]
+    assert "- callback: Дахин залгах" in schema["description"]
+    assert "never read the codes" in schema["description"]
+    assert "Mongolian" in schema["parameters"]["properties"]["note"]["description"]
+
+
+async def test_record_outcome_stores_validated_code() -> None:
+    state = CallState(bootstrap=make_bootstrap(campaign=OUTCOME_CAMPAIGN))
+    tool = build_tools(state, FakeControl())[0]
+
+    reply = await tool(FakeRunContext(), outcome_code="agreed", note=" Урамшууллыг авна. ")
+    assert "Do not mention it" in reply
+    assert (state.outcome, state.outcome_note) == ("agreed", "Урамшууллыг авна.")
+
+    # the customer changes their mind: the last value wins; labels are accepted
+    await tool(FakeRunContext(), outcome_code="Татгалзсан", note="Бодлоо өөрчилсөн." * 30)
+    assert state.outcome == "declined"
+    assert len(state.outcome_note) == 200
+
+    with pytest.raises(ToolError) as err:
+        await tool(FakeRunContext(), outcome_code="maybe", note="x")
+    assert "agreed, declined, callback" in str(err.value)
+    assert state.outcome == "declined"
+
+
+def test_call_state_record_outcome_without_campaign() -> None:
+    state = CallState(bootstrap=make_bootstrap())
+    assert state.outcomes == []
+    assert state.record_outcome("agreed", "x") == ""
+    assert (state.outcome, state.outcome_note) == ("", "")

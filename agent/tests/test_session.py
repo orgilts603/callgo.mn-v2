@@ -31,6 +31,7 @@ from callgo_agent.schemas import (
     CallDirection,
     CallStatus,
     CampaignInfo,
+    CampaignOutcome,
     Contact,
     Event,
     JobMetadata,
@@ -49,11 +50,14 @@ from callgo_agent.session import (
     CallRecorder,
     PipelineFactories,
     SipInfo,
+    analysis_prompt,
     analyze_call,
     build_instructions,
     build_turn_handling,
     end_reason_for_close,
     enforce_max_duration,
+    fallback_analysis,
+    final_outcome,
     outbound_opening_instructions,
     parse_analysis,
     parse_job_metadata,
@@ -131,6 +135,13 @@ CAMPAIGN = CampaignInfo(
     script="{{name}}-д {{discount}} хөнгөлөлт санал болго. Захиалга: {{ order }}. {{missing}}",
     vars={"discount": "20%", "product": "Tea"},
 )
+OUTCOMES = [
+    CampaignOutcome(code="agreed", label="Зөвшөөрсөн", description="Санал болголтыг хүлээн авсан"),
+    CampaignOutcome(code="declined", label="Татгалзсан", description="Сонирхолгүй гэсэн"),
+    CampaignOutcome(code="callback", label="Дахин залгах", terminal=False),
+    CampaignOutcome(code="no_contact", label="Холбогдоогүй"),
+]
+OUTCOME_CAMPAIGN = CAMPAIGN.model_copy(update={"outcomes": OUTCOMES})
 
 
 # ---- templates & instructions --------------------------------------------------------
@@ -164,6 +175,20 @@ def test_build_instructions_mn() -> None:
     assert "The customer called you." in text
     assert "Always answer in Mongolian" in text
     assert "2026-09-30 Wednesday 10:00" in text
+
+
+def test_build_instructions_outcome_section() -> None:
+    text = build_instructions(make_bootstrap(campaign=OUTCOME_CAMPAIGN))
+    assert "# Call outcome" in text
+    assert "- agreed: Зөвшөөрсөн — Санал болголтыг хүлээн авсан" in text
+    assert "- callback: Дахин залгах\n" in text  # no description -> no dash
+    assert "- no_contact: Холбогдоогүй" in text
+    assert "Never read them" in text
+    assert "record_outcome" in text
+    assert text.index("# Call outcome") < text.index("# Language")
+
+    assert "# Call outcome" not in build_instructions(make_bootstrap(campaign=CAMPAIGN))
+    assert "# Call outcome" not in build_instructions(make_bootstrap())
 
 
 def test_build_instructions_other_language_and_defaults() -> None:
@@ -612,6 +637,51 @@ def test_parse_analysis_variants() -> None:
     assert parse_analysis("[1, 2]") is None
 
 
+def test_analysis_prompt_with_outcomes() -> None:
+    assert analysis_prompt() == sess.ANALYSIS_PROMPT
+    assert "outcomeNote" not in sess.ANALYSIS_PROMPT
+    prompt = analysis_prompt(OUTCOMES)
+    assert prompt.startswith(sess.ANALYSIS_PROMPT.split("\n")[0])
+    assert '"outcome": "<code>", "outcomeNote": "..."' in prompt
+    assert "- agreed: Зөвшөөрсөн — Санал болголтыг хүлээн авсан" in prompt
+    assert "- declined: Татгалзсан — Сонирхолгүй гэсэн" in prompt
+    assert "Дуудлагын үр дүнгийн хүснэгт" in prompt
+    assert "200 тэмдэгт" in prompt
+
+
+def test_parse_analysis_outcome_validation(caplog: pytest.LogCaptureFixture) -> None:
+    def parse(outcome: object, note: str = "Тэр зөвшөөрсөн.") -> Any:
+        import json
+
+        body = {"summary": "S", "sentiment": "positive", "outcome": outcome, "outcomeNote": note}
+        result = parse_analysis(json.dumps(body, ensure_ascii=False), OUTCOMES)
+        assert result is not None
+        return result
+
+    valid = parse("agreed")
+    assert (valid.outcome, valid.outcome_note) == ("agreed", "Тэр зөвшөөрсөн.")
+    assert parse(" DECLINED ").outcome == "declined"  # code, case-insensitive
+    assert parse("зөвшөөрсөн").outcome == "agreed"  # label, case-insensitive
+    assert parse("Дахин залгах").outcome == "callback"
+    assert parse(None).outcome == ""
+    assert parse("").outcome == ""
+
+    caplog.clear()
+    unknown = parse("maybe_later")
+    assert unknown.outcome == ""
+    assert "maybe_later" in caplog.text
+
+    long_note = parse("agreed", "үг " * 150).outcome_note
+    assert len(long_note) == 200 and long_note.endswith("…")
+
+    snake = parse_analysis('{"summary": "S", "outcome": "agreed", "outcome_note": "N"}', OUTCOMES)
+    assert snake is not None and snake.outcome_note == "N"
+
+    # a campaign without outcomes ignores whatever the model says
+    plain = parse_analysis('{"summary": "S", "outcome": "agreed", "outcomeNote": "N"}')
+    assert plain is not None and (plain.outcome, plain.outcome_note) == ("", "")
+
+
 async def test_analyze_call_uses_llm_json() -> None:
     model = FakeLLM(
         [
@@ -652,6 +722,80 @@ async def test_analyze_call_falls_back(model: FakeLLM) -> None:
     assert not result.from_llm
     assert result.sentiment == Sentiment.NEUTRAL
     assert "Захиалгаа шалгах гэсэн юм." in result.summary
+
+
+async def test_analyze_call_asks_for_outcome() -> None:
+    model = FakeLLM(
+        [
+            (
+                '```json\n{"summary": "Харилцагч зөвшөөрөв.", "sentiment": "positive", '
+                '"intent": "offer_accepted", "outcome": "Зөвшөөрсөн", '
+                '"outcomeNote": "Урамшууллыг авахаар тохиролцсон."}\n```'
+            )
+        ]
+    )
+    result = await analyze_call(
+        model,  # type: ignore[arg-type]
+        TURNS,
+        end_reason="hangup_agent",
+        outcomes=OUTCOMES,
+        recorded_outcome="agreed",
+    )
+    assert result.from_llm
+    assert (result.outcome, result.outcome_note) == ("agreed", "Урамшууллыг авахаар тохиролцсон.")
+    system, user = model.contexts[0].messages()
+    assert "Дуудлагын үр дүнгийн хүснэгт" in (system.text_content or "")
+    assert "- no_contact: Холбогдоогүй" in (system.text_content or "")
+    assert "Outcome recorded during the call: agreed" in (user.text_content or "")
+
+
+async def test_analyze_call_outcome_fallbacks() -> None:
+    # LLM failure after a real conversation: no guess
+    failed = await analyze_call(
+        FakeLLM([], error=RuntimeError("down")),  # type: ignore[arg-type]
+        TURNS,
+        outcomes=OUTCOMES,
+    )
+    assert not failed.from_llm and (failed.outcome, failed.outcome_note) == ("", "")
+
+    # the customer never spoke: no LLM call, no_contact
+    model = FakeLLM(['{"summary": "x", "outcome": "agreed"}'])
+    silent = await analyze_call(model, TURNS[:1], outcomes=OUTCOMES)  # type: ignore[arg-type]
+    assert model.contexts == []
+    assert silent.outcome == "no_contact"
+    assert silent.outcome_note == "Харилцагч ярианд оролцоогүй."
+
+    unanswered = await analyze_call(None, [], end_reason="no_answer", outcomes=OUTCOMES)
+    assert (unanswered.outcome, unanswered.outcome_note) == (
+        "no_contact",
+        "Дуудлагад хариу өгөөгүй.",
+    )
+    busy = fallback_analysis([], OUTCOMES, "busy")
+    assert busy.outcome == "no_contact" and "завгүй" in busy.outcome_note
+
+    # no_contact not defined by the campaign, or no outcomes at all
+    without = [o for o in OUTCOMES if o.code != "no_contact"]
+    assert fallback_analysis([], without, "no_answer").outcome == ""
+    assert fallback_analysis([]).outcome == ""
+    assert fallback_analysis(TURNS, OUTCOMES).outcome == ""
+
+
+def test_final_outcome_precedence() -> None:
+    state = CallState(bootstrap=make_bootstrap(campaign=OUTCOME_CAMPAIGN))
+    analysis = sess.CallAnalysis(summary="S", outcome="declined", outcome_note="Татгалзсан.")
+    assert final_outcome(state, analysis) == ("declined", "Татгалзсан.")
+
+    assert state.record_outcome("agreed", "Зөвшөөрсөн гэж хэлсэн.") == "agreed"
+    assert final_outcome(state, analysis) == ("agreed", "Зөвшөөрсөн гэж хэлсэн.")
+
+    # recorded without a note: the analysis note is used only if it agrees
+    state.outcome_note = ""
+    assert final_outcome(state, analysis) == ("agreed", "")
+    agreeing = sess.CallAnalysis(summary="S", outcome="agreed", outcome_note="Тохиролцов.")
+    assert final_outcome(state, agreeing) == ("agreed", "Тохиролцов.")
+
+    empty = CallState(bootstrap=make_bootstrap(campaign=OUTCOME_CAMPAIGN))
+    assert final_outcome(empty, sess.CallAnalysis(summary="S", outcome_note="x")) == ("", "")
 
 
 async def test_analyze_call_skips_llm_without_customer_speech() -> None:
@@ -712,7 +856,46 @@ async def test_finalizer_emits_call_ended_once() -> None:
         "intent": "x",
         "durationSec": 42,
         "llmModelUsed": "google/gemini-2.5-flash",
+        "outcome": "",
+        "outcomeNote": "",
     }
+
+
+async def test_finalizer_recorded_outcome_wins_over_analysis() -> None:
+    sink = FakeSink()
+    boot = make_bootstrap(campaign=OUTCOME_CAMPAIGN)
+    emitter = EventEmitter(sink, org_id=ORG, call_id=CALL, flush_interval_ms=60_000)
+    rec = CallRecorder(emitter, boot)
+    rec.turns.extend(TURNS)
+    state = CallState(bootstrap=boot)
+    state.record_outcome("callback", "Маргааш залгана.")
+    model = FakeLLM(
+        ['{"summary": "S", "sentiment": "neutral", "outcome": "declined", "outcomeNote": "N"}']
+    )
+    fin = CallFinalizer(state=state, recorder=rec, emitter=emitter, model=model)  # type: ignore[arg-type]
+    payload = await fin.finalize()
+    assert (payload.outcome, payload.outcome_note) == ("callback", "Маргааш залгана.")
+    ended = sink.of("call.ended")[0].payload
+    assert ended["outcome"] == "callback" and ended["outcomeNote"] == "Маргааш залгана."
+    user = model.contexts[0].messages()[1]
+    assert "Outcome recorded during the call: callback" in (user.text_content or "")
+
+
+async def test_finalizer_uses_analysis_outcome_when_none_recorded() -> None:
+    sink = FakeSink()
+    boot = make_bootstrap(campaign=OUTCOME_CAMPAIGN)
+    emitter = EventEmitter(sink, org_id=ORG, call_id=CALL, flush_interval_ms=60_000)
+    rec = CallRecorder(emitter, boot)
+    rec.turns.extend(TURNS)
+    model = FakeLLM(['{"summary": "S", "outcome": "declined", "outcomeNote": "Сонирхолгүй."}'])
+    fin = CallFinalizer(
+        state=CallState(bootstrap=boot),
+        recorder=rec,
+        emitter=emitter,
+        model=model,  # type: ignore[arg-type]
+    )
+    payload = await fin.finalize()
+    assert (payload.outcome, payload.outcome_note) == ("declined", "Сонирхолгүй.")
 
 
 async def test_finalizer_respects_tool_end_reason() -> None:
@@ -928,6 +1111,39 @@ async def test_run_call_outbound_no_answer() -> None:
     assert ctx.shutdown_reasons == ["no answer"]
 
 
+async def test_run_call_outbound_no_answer_sets_no_contact() -> None:
+    meta = f'{{"callId": "{CALL}", "direction": "outbound", "toNumber": "+97699112233"}}'
+    ctx = FakeJobContext(metadata=meta, participant=FakeParticipant(status="dialing"))
+    boot = make_bootstrap(
+        direction=CallDirection.OUTBOUND, campaign=OUTCOME_CAMPAIGN, llm_cfg=make_llm_config()
+    )
+    client = FakeClient(boot=boot)
+    model = FakeLLM(['{"summary": "x"}'])
+    task = asyncio.create_task(
+        run_call(ctx, client, factories=make_factories(model))  # type: ignore[arg-type]
+    )
+    for _ in range(50):
+        await asyncio.sleep(0)
+        if ctx.room.handlers["participant_disconnected"]:
+            break
+    ctx.room.emit("participant_disconnected", ctx.participant)
+    await asyncio.wait_for(task, 2)
+    ended = client.of("call.ended")[0].payload
+    assert ended["endReason"] == "no_answer"
+    assert ended["outcome"] == "no_contact"
+    assert ended["outcomeNote"] == "Дуудлагад хариу өгөөгүй."
+    assert model.contexts == []  # no LLM involved
+
+
+async def test_run_call_pipeline_failure_sets_no_contact() -> None:
+    ctx = FakeJobContext()
+    boot = make_bootstrap(llm_cfg=make_llm_config(), campaign=OUTCOME_CAMPAIGN)
+    client = FakeClient(boot=boot)
+    await run_call(ctx, client, factories=make_factories(fail=True))  # type: ignore[arg-type]
+    ended = client.of("call.ended")[0].payload
+    assert (ended["endReason"], ended["outcome"]) == ("failed", "no_contact")
+
+
 async def test_wait_for_answer_resolves_on_active() -> None:
     room = FakeRoom()
     p = FakeParticipant(status="ringing")
@@ -965,6 +1181,7 @@ async def test_run_call_happy_path(
     assert session.room_options.participant_identity == "sip_+97699112233"
     assert isinstance(session.agent, CallGoAgent)
     assert [t.info.name for t in session.agent.tools] == ["end_call"]
+    assert "# Call outcome" not in session.agent.instructions
 
     # speech flows through the agent's STT hook, then the session reports it
     session.agent.process_speech_event(

@@ -1,13 +1,32 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ExternalLink, Megaphone, Plus } from 'lucide-react'
+import { CalendarClock, ExternalLink, FlaskConical, Megaphone, Plus } from 'lucide-react'
 import {
-  Button, CampaignStatusBadge, Card, EmptyState, PageHeader, Skeleton, Table, TBody, TD, TH, THead, TR,
+  Badge, Button, CampaignStatusBadge, Card, EmptyState, PageHeader, Skeleton, Table, TBody, TD, TH, THead, TR,
 } from '@/components/ui'
+import type { Campaign } from '@/lib/types'
 import { fmtAgo } from '@/lib/utils'
 import { CampaignActions, ProgressBar } from './components'
 import { useAgentProfiles, useCampaignLive, useCampaigns, useSipNumbers } from './hooks'
 import { NewCampaignDialog } from './NewCampaignDialog'
+import { scheduleChip } from './schedule'
+
+function CampaignTags({ campaign: c }: { campaign: Campaign }) {
+  const chip = scheduleChip(c.schedule)
+  const dry = (c.dryRunLimit ?? 0) > 0
+  if (!chip && !dry) return null
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+      {dry && <Badge tone="warning" title={`Эхний ${c.dryRunLimit} дугаарт залгаад түр зогсоно`}><FlaskConical className="h-3 w-3" />Туршилт</Badge>}
+      {chip && (
+        <Badge tone="neutral" data-testid="schedule-chip"
+          title={`${c.schedule.timezone || ''}${c.schedule.pacePerMinute ? ` · минутад ${c.schedule.pacePerMinute}` : ''}`.trim()}>
+          <CalendarClock className="h-3 w-3" />{chip}
+        </Badge>
+      )}
+    </div>
+  )
+}
 
 export function CampaignsPage() {
   const campaigns = useCampaigns()
@@ -32,7 +51,7 @@ export function CampaignsPage() {
             action={<Button variant="secondary" onClick={() => void campaigns.refetch()}>Дахин оролдох</Button>} />
         ) : items.length === 0 ? (
           <EmptyState icon={<Megaphone className="h-8 w-8" />} title="Кампанит ажил алга"
-            description="CSV жагсаалтаар гарах дуудлагын кампанит ажил үүсгээрэй."
+            description="CSV эсвэл Excel жагсаалтаар гарах дуудлагын кампанит ажил үүсгээрэй."
             action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4" />Шинэ кампанит ажил</Button>} />
         ) : (
           <Table>
@@ -45,7 +64,10 @@ export function CampaignsPage() {
             <TBody>
               {items.map((c) => (
                 <TR key={c.id}>
-                  <TD><Link to={`/campaigns/${c.id}`} className="font-medium hover:text-[var(--accent)]">{c.name}</Link></TD>
+                  <TD>
+                    <Link to={`/campaigns/${c.id}`} className="font-medium hover:text-[var(--accent)]">{c.name}</Link>
+                    <CampaignTags campaign={c} />
+                  </TD>
                   <TD><CampaignStatusBadge status={c.status} /></TD>
                   <TD className="text-[var(--fg-muted)]">{(c.sipNumberId && sipLabel.get(c.sipNumberId)) || '—'}</TD>
                   <TD className="text-[var(--fg-muted)]">{(c.agentProfileId && profileName.get(c.agentProfileId)) || '—'}</TD>

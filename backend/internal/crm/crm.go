@@ -35,6 +35,7 @@ var (
 	_ domain.CallRepository         = (*Store)(nil)
 	_ domain.ContactRepository      = (*Store)(nil)
 	_ domain.CampaignRepository     = (*Store)(nil)
+	_ domain.DoNotCallRepository    = (*Store)(nil)
 	_ domain.LexiconRepository      = (*Store)(nil)
 )
 

@@ -91,18 +91,42 @@ const (
 
 // PreviewResult is a look at the top of a file for a mapping UI.
 type PreviewResult struct {
-	Columns []string   `json:"columns"`
-	Rows    [][]string `json:"rows"`
+	Columns []string `json:"columns"`
+	// Rows holds up to n data rows, each padded to the header width.
+	Rows [][]string `json:"rows"`
 	// Mapping maps each (non-empty) header to the field it will fill:
 	// "phone", "name", "tags" or "var".
 	Mapping map[string]string `json:"mapping"`
+	// Total is the number of non-blank data rows in the whole file.
+	Total int `json:"total"`
+	// Format is the detected file format ("csv" or "xlsx").
+	Format Format `json:"format"`
 }
 
-// ParseTargets parses a campaign target list. The tags column, if any, is
+// ParseTargets parses a CSV campaign target list. The tags column, if any, is
 // kept as an ordinary variable because targets have no tags.
 func ParseTargets(r io.Reader, opts Options) (Result, error) {
+	src, err := open(r)
+	if err != nil {
+		return Result{}, err
+	}
+	return parseTargets(src, opts)
+}
+
+// ParseTargetsFile is ParseTargets for a CSV or Excel (.xlsx) upload; the
+// format is detected from filename and the file's first bytes.
+func ParseTargetsFile(r io.Reader, filename string, opts Options) (Result, error) {
+	src, _, err := openFile(r, filename)
+	if err != nil {
+		return Result{}, err
+	}
+	return parseTargets(src, opts)
+}
+
+func parseTargets(src *source, opts Options) (Result, error) {
+	defer src.Close()
 	res := Result{Targets: []domain.CampaignTarget{}}
-	sum, err := scan(r, opts, false, func(row parsedRow) {
+	sum, err := scan(src, opts, false, func(row parsedRow) {
 		res.Targets = append(res.Targets, domain.CampaignTarget{
 			Phone:  row.phone,
 			Name:   row.name,
@@ -117,10 +141,28 @@ func ParseTargets(r io.Reader, opts Options) (Result, error) {
 	return res, nil
 }
 
-// ParseContacts parses a contact list.
+// ParseContacts parses a CSV contact list.
 func ParseContacts(r io.Reader, opts Options) (ContactsResult, error) {
+	src, err := open(r)
+	if err != nil {
+		return ContactsResult{}, err
+	}
+	return parseContacts(src, opts)
+}
+
+// ParseContactsFile is ParseContacts for a CSV or Excel (.xlsx) upload.
+func ParseContactsFile(r io.Reader, filename string, opts Options) (ContactsResult, error) {
+	src, _, err := openFile(r, filename)
+	if err != nil {
+		return ContactsResult{}, err
+	}
+	return parseContacts(src, opts)
+}
+
+func parseContacts(src *source, opts Options) (ContactsResult, error) {
+	defer src.Close()
 	res := ContactsResult{Contacts: []domain.Contact{}}
-	sum, err := scan(r, opts, true, func(row parsedRow) {
+	sum, err := scan(src, opts, true, func(row parsedRow) {
 		res.Contacts = append(res.Contacts, domain.Contact{
 			Phone: row.phone,
 			Name:  row.name,
@@ -143,19 +185,34 @@ func TemplateCSV() []byte {
 		"+97688001122,Сарнай,VIP харилцагч\r\n")
 }
 
-// Preview reads the header and up to n data rows (default 10) and reports how
-// columns would be mapped. It does not validate phone numbers.
+// Preview reads a CSV file and reports its header, up to n data rows
+// (default 10), the total number of data rows and how columns would be
+// mapped. It does not validate phone numbers.
 func Preview(r io.Reader, n int) (PreviewResult, error) {
-	if n <= 0 {
-		n = 10
-	}
 	src, err := open(r)
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	p := PreviewResult{Columns: src.header, Rows: [][]string{}, Mapping: map[string]string{}}
+	return preview(src, FormatCSV, n)
+}
+
+// PreviewFile is Preview for a CSV or Excel (.xlsx) upload.
+func PreviewFile(r io.Reader, filename string, n int) (PreviewResult, error) {
+	src, format, err := openFile(r, filename)
+	if err != nil {
+		return PreviewResult{}, err
+	}
+	return preview(src, format, n)
+}
+
+func preview(src *source, format Format, n int) (PreviewResult, error) {
+	defer src.Close()
+	if n <= 0 {
+		n = 10
+	}
+	p := PreviewResult{Columns: src.header, Rows: [][]string{}, Mapping: map[string]string{}, Format: format}
 	var sample [][]string
-	for len(p.Rows) < n || len(sample) < sampleSize {
+	for {
 		rec, err := src.next()
 		if errors.Is(err, io.EOF) {
 			break
@@ -163,11 +220,19 @@ func Preview(r io.Reader, n int) (PreviewResult, error) {
 		if err != nil {
 			return PreviewResult{}, err
 		}
-		if rec.err != nil || blank(rec.fields) {
+		if rec.err == nil && blank(rec.fields) {
+			continue
+		}
+		p.Total++
+		if rec.err != nil {
 			continue
 		}
 		if len(p.Rows) < n {
-			p.Rows = append(p.Rows, rec.fields)
+			row := rec.fields
+			if len(row) < len(src.header) {
+				row = append(row, make([]string, len(src.header)-len(row))...)
+			}
+			p.Rows = append(p.Rows, row)
 		}
 		if len(sample) < sampleSize {
 			sample = append(sample, rec.fields)
@@ -226,17 +291,31 @@ done:
 type record struct {
 	line   int
 	fields []string
-	err    error // per-row CSV syntax error
+	err    error // per-row syntax error
+}
+
+// rowReader yields raw rows (header included) and io.EOF at the end.
+type rowReader interface {
+	read() (record, error)
 }
 
 // source is a header plus a pull-based row stream with a small pushback queue
 // so a sample can be inspected before rows are processed.
 type source struct {
-	cr     *csv.Reader
+	rows   rowReader
 	header []string
 	queue  []record
+	close  func() error
 }
 
+func (s *source) Close() error {
+	if s.close == nil {
+		return nil
+	}
+	return s.close()
+}
+
+// open reads a CSV stream.
 func open(r io.Reader) (*source, error) {
 	br := bufio.NewReaderSize(r, peekSize)
 	if bom, _ := br.Peek(3); bytes.Equal(bom, []byte{0xEF, 0xBB, 0xBF}) {
@@ -260,17 +339,24 @@ func open(r io.Reader) (*source, error) {
 	cr.FieldsPerRecord = -1
 	cr.LazyQuotes = true
 	cr.TrimLeadingSpace = true
+	return withHeader(&source{rows: csvRows{cr: cr}})
+}
 
-	s := &source{cr: cr}
+// withHeader consumes rows up to and including the first non-blank one,
+// which becomes the header.
+func withHeader(s *source) (*source, error) {
 	for {
-		rec, err := s.read()
+		rec, err := s.rows.read()
 		if errors.Is(err, io.EOF) {
+			_ = s.Close()
 			return nil, ErrEmptyFile
 		}
 		if err != nil {
+			_ = s.Close()
 			return nil, err
 		}
 		if rec.err != nil {
+			_ = s.Close()
 			return nil, fmt.Errorf("%w: header: %v", domain.ErrInvalid, rec.err)
 		}
 		if blank(rec.fields) {
@@ -284,8 +370,10 @@ func open(r io.Reader) (*source, error) {
 	}
 }
 
-func (s *source) read() (record, error) {
-	fields, err := s.cr.Read()
+type csvRows struct{ cr *csv.Reader }
+
+func (c csvRows) read() (record, error) {
+	fields, err := c.cr.Read()
 	if err != nil {
 		var pe *csv.ParseError
 		if errors.As(err, &pe) {
@@ -296,9 +384,11 @@ func (s *source) read() (record, error) {
 		}
 		return record{}, fmt.Errorf("csvimport: read: %w", err)
 	}
-	line, _ := s.cr.FieldPos(0)
+	line, _ := c.cr.FieldPos(0)
 	return record{line: line, fields: fields}, nil
 }
+
+func (s *source) read() (record, error) { return s.rows.read() }
 
 func (s *source) next() (record, error) {
 	if len(s.queue) > 0 {
@@ -475,11 +565,7 @@ func (s *summary) fail(line int, msg string) {
 }
 
 // scan streams the file and calls accept for every valid, unique row.
-func scan(r io.Reader, opts Options, tagsRole bool, accept func(parsedRow)) (summary, error) {
-	src, err := open(r)
-	if err != nil {
-		return summary{}, err
-	}
+func scan(src *source, opts Options, tagsRole bool, accept func(parsedRow)) (summary, error) {
 	sample, err := src.peekRows(sampleSize)
 	if err != nil {
 		return summary{}, err
