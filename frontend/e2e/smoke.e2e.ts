@@ -44,14 +44,13 @@ test.describe('CallGo.mn dashboard smoke', () => {
 
     // Rows re-sort as the simulator adds calls, so dispatch the click on the
     // row instead of hit-testing a moving target, then read the selection from the URL.
-    const callId = await rows.first().getAttribute('data-call-id')
-    expect(callId).toBeTruthy()
     await rows.first().dispatchEvent('click')
     await expect(page).toHaveURL(/[?&]call=[0-9a-f-]{36}/)
     const drawer = page.getByRole('dialog')
     await expect(drawer).toBeVisible()
-    // The drawer header shows "from → to" of the selected call.
-    await expect(drawer.getByText(/\d/).first()).toBeVisible()
+    // Drawer content: transcript card and the call actions.
+    await expect(drawer.getByRole('log', { name: 'Яриа' })).toBeVisible({ timeout: 15_000 })
+    await expect(drawer.getByRole('button', { name: 'Close' })).toBeVisible()
     // Escape closes the drawer (a pointer click on its close button is flaky
     // on software-rendered headless Chromium while live rows keep animating).
     await page.keyboard.press('Escape')

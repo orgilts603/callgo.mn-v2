@@ -1,8 +1,12 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { configure, act, render, screen, waitFor } from '@testing-library/react'
 import { api, HttpError } from '@/lib/api'
 import type { RecordingInfo } from '@/lib/types'
 import { AudioPlayer } from '../AudioPlayer'
 import { makeQueryClient, wrapper } from '../testUtils'
+
+// jsdom + recharts/wavesurfer are slow when the CI box is busy.
+vi.setConfig({ testTimeout: 30_000 })
+configure({ asyncUtilTimeout: 10_000 })
 
 const ws = vi.hoisted(() => ({ mock: null as null | ReturnType<typeof import('../testUtils').createWaveSurferMock> }))
 vi.mock('wavesurfer.js', async () => {

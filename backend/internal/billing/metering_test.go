@@ -46,8 +46,8 @@ func TestRecordCallMetersAndCosts(t *testing.T) {
 	assert.Equal(t, float64(12_000), u[domain.UsageLLMTokensIn].Quantity)
 	assert.Equal(t, int64(120), u[domain.UsageLLMTokensIn].CostMNT) // 12k × 10/1k
 	assert.Equal(t, int64(30), u[domain.UsageLLMTokensOut].CostMNT)
-	assert.Equal(t, int64(90), u[domain.UsageSTTSeconds].CostMNT)  // 1.5 min × 60
-	assert.Equal(t, int64(125), u[domain.UsageTTSChars].CostMNT)   // 2.5k × 50/1k
+	assert.Equal(t, int64(90), u[domain.UsageSTTSeconds].CostMNT) // 1.5 min × 60
+	assert.Equal(t, int64(125), u[domain.UsageTTSChars].CostMNT)  // 2.5k × 50/1k
 	require.NotNil(t, u[domain.UsageCallMinutes].CallID)
 	assert.Equal(t, call.ID, *u[domain.UsageCallMinutes].CallID)
 	assert.Equal(t, now, u[domain.UsageCallMinutes].At)

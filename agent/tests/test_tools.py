@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import pytest
 from livekit import api as lk_api
@@ -18,15 +20,20 @@ from callgo_agent.schemas import (
     CampaignInfo,
     CampaignOutcome,
     Contact,
+    HandoffInfo,
     Organization,
 )
 from callgo_agent.tools import (
     ALL_TOOLS,
+    AUTO_TOOLS,
+    CallbackRequest,
     CallState,
     LiveKitCallControl,
     build_tools,
     clip_note,
     contact_summary,
+    local_tz,
+    parse_callback_time,
     resolve_outcome,
 )
 
@@ -388,3 +395,131 @@ def test_lookup_knowledge_in_profile_tools_is_not_built_nor_warned(
     with caplog.at_level("WARNING", logger="callgo.tools"):
         assert names(build_tools(state, FakeControl())) == ["end_call"]
     assert "unknown tool" not in caplog.text
+
+
+# ---- callbacks: time parsing and intents -------------------------------------------------
+
+UB = ZoneInfo("Asia/Ulaanbaatar")
+NOW = datetime(2026, 9, 30, 11, 15, tzinfo=UB)  # a Wednesday
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("2026-10-01T10:00", datetime(2026, 10, 1, 10, 0, tzinfo=UB)),
+        ("2026-10-01 16:30", datetime(2026, 10, 1, 16, 30, tzinfo=UB)),
+        ("2026-10-01", datetime(2026, 10, 1, 10, 0, tzinfo=UB)),
+        ("2026-10-01T02:00:00Z", datetime(2026, 10, 1, 10, 0, tzinfo=UB)),
+        ("маргааш 10 цагт", datetime(2026, 10, 1, 10, 0, tzinfo=UB)),
+        ("Маргааш 10:30-д", datetime(2026, 10, 1, 10, 30, tzinfo=UB)),
+        ("маргааш 10 цаг 30 минутад", datetime(2026, 10, 1, 10, 30, tzinfo=UB)),
+        ("маргааш 10 цаг хагаст", datetime(2026, 10, 1, 10, 30, tzinfo=UB)),
+        ("маргааш", datetime(2026, 10, 1, 10, 0, tzinfo=UB)),
+        ("маргааш орой", datetime(2026, 10, 1, 18, 0, tzinfo=UB)),
+        ("нөгөөдөр өглөө", datetime(2026, 10, 2, 10, 0, tzinfo=UB)),
+        ("2 цагийн дараа", datetime(2026, 9, 30, 13, 15, tzinfo=UB)),
+        ("хоёр цагийн дараа", datetime(2026, 9, 30, 13, 15, tzinfo=UB)),
+        ("хагас цагийн дараа", datetime(2026, 9, 30, 11, 45, tzinfo=UB)),
+        ("20 минутын дараа", datetime(2026, 9, 30, 11, 35, tzinfo=UB)),
+        ("1 цаг 30 минутын дараа", datetime(2026, 9, 30, 12, 45, tzinfo=UB)),
+        ("3 хоногийн дараа", datetime(2026, 10, 3, 11, 15, tzinfo=UB)),
+        ("долоо хоногийн дараа", datetime(2026, 10, 7, 11, 15, tzinfo=UB)),
+        ("баасан гарагт орой 7 цагт", datetime(2026, 10, 2, 19, 0, tzinfo=UB)),
+        ("лхагва гарагт", datetime(2026, 10, 7, 10, 0, tzinfo=UB)),  # today is Wednesday
+        ("3 цагт", datetime(2026, 9, 30, 15, 0, tzinfo=UB)),  # 1-7 o'clock = afternoon
+        ("өглөө 7 цагт", datetime(2026, 10, 1, 7, 0, tzinfo=UB)),  # past today -> tomorrow
+        ("арван хоёр цагт", datetime(2026, 9, 30, 12, 0, tzinfo=UB)),
+        ("9 цагт", datetime(2026, 10, 1, 9, 0, tzinfo=UB)),
+        ("tomorrow 3pm", datetime(2026, 10, 1, 15, 0, tzinfo=UB)),
+        ("in 2 hours", datetime(2026, 9, 30, 13, 15, tzinfo=UB)),
+        ("дараа нь", None),
+        ("хэзээ ч юм", None),
+        ("", None),
+    ],
+)
+def test_parse_callback_time(text: str, expected: datetime | None) -> None:
+    assert parse_callback_time(text, NOW, UB) == expected
+
+
+def test_parse_callback_time_accepts_utc_now_and_default_tz() -> None:
+    got = parse_callback_time("маргааш 10 цагт", NOW.astimezone(UTC))
+    assert got == datetime(2026, 10, 1, 10, 0, tzinfo=UB)
+    assert local_tz("Not/AZone").utcoffset(NOW.replace(tzinfo=None)) == timedelta(hours=8)
+
+
+async def test_schedule_callback_records_intent() -> None:
+    boot = make_bootstrap(tools=["schedule_callback"])
+    state = CallState(bootstrap=boot, clock=lambda: NOW.astimezone(UTC))
+    tool = build_tools(state, FakeControl())[0]
+    reply = await tool(FakeRunContext(), when="маргааш 10 цагт", note=" Үнийн санал ")
+    assert "2026-10-01 10:00" in reply
+    assert state.callbacks[0].due_at == datetime(2026, 10, 1, 10, 0, tzinfo=UB)
+    intents = state.callback_intents()
+    assert [i.model_dump(mode="json") for i in intents] == [
+        {"dueAt": "2026-10-01T02:00:00Z", "note": "Үнийн санал"}
+    ]
+
+    with pytest.raises(ToolError, match="Could not understand"):
+        await tool(FakeRunContext(), when="дараа нь", note="x")
+    with pytest.raises(ToolError, match="past"):
+        await tool(FakeRunContext(), when="2026-09-29T10:00", note="x")
+    with pytest.raises(ToolError, match="too far"):
+        await tool(FakeRunContext(), when="2027-09-29T10:00", note="x")
+    assert len(state.callbacks) == 1
+
+    # requests without a due time (legacy) are summarised but not sent as intents
+    state.callbacks.append(CallbackRequest(when="хэзээ ч юм", note=""))
+    assert len(state.callback_intents()) == 1
+
+
+def test_callback_time_uses_org_timezone() -> None:
+    boot = make_bootstrap(tools=["schedule_callback"])
+    boot = boot.model_copy(update={"org": boot.org.model_copy(update={"timezone": "Asia/Tokyo"})})
+    assert str(CallState(bootstrap=boot).tz) == "Asia/Tokyo"
+
+
+# ---- operator handoff tool --------------------------------------------------------------
+
+
+async def test_request_operator_auto_enabled_and_notifies_once() -> None:
+    boot = make_bootstrap(tools=["end_call"]).model_copy(
+        update={"handoff": HandoffInfo(enabled=True)}
+    )
+    notified: list[str] = []
+    state = CallState(bootstrap=boot, on_handoff_request=notified.append)
+    tools = build_tools(state, FakeControl())
+    assert names(tools) == ["end_call", "request_operator"]
+    tool = by_name(tools, "request_operator")
+    assert tool.info.flags & ToolFlag.IGNORE_ON_ENTER
+    schema = build_legacy_openai_schema(tool)["function"]
+    assert set(schema["parameters"]["properties"]) == {"reason"}
+
+    reply = await tool(FakeRunContext(), reason=" wants a person ")
+    assert "operator will join" in reply and "Mongolian" in reply
+    assert state.handoff == "requested" and notified == ["wants a person"]
+
+    again = await tool(FakeRunContext())
+    assert "already requested" in again and notified == ["wants a person"]
+
+    state.handoff = "active"
+    assert "already on the call" in await tool(FakeRunContext())
+    assert not state.request_handoff()
+
+    state.handoff = "ended"  # after an operator left, a new request is possible
+    assert state.request_handoff() and notified[-1] == ""
+
+
+def test_request_operator_absent_without_handoff() -> None:
+    state = CallState(bootstrap=make_bootstrap(tools=["request_operator"]))
+    assert build_tools(state, FakeControl()) == []  # never enabled via profile.tools
+    assert "request_operator" in AUTO_TOOLS and "request_operator" not in ALL_TOOLS
+
+
+def test_request_handoff_listener_errors_are_contained(caplog: pytest.LogCaptureFixture) -> None:
+    def boom(reason: str) -> None:
+        raise RuntimeError("emit failed")
+
+    state = CallState(bootstrap=make_bootstrap(), on_handoff_request=boom)
+    assert state.request_handoff("x") and state.handoff == "requested"
+    assert "handoff request notification failed" in caplog.text
+    assert not state.passive

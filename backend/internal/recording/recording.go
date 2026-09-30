@@ -64,15 +64,20 @@ const (
 type CallRepo interface {
 	GetCall(ctx context.Context, id uuid.UUID) (*domain.Call, error)
 	GetCallByRoom(ctx context.Context, roomName string) (*domain.Call, error)
-	// SetCallRecording stores rec as the call's recording (nil clears it)
-	// and sets calls.recording_url to URLPath(callID) when rec.Status is
-	// "ready", or "" otherwise.
+	// SetCallRecording stores rec as the call's recording (nil clears it).
+	// If the repository also implements RecordingURLSetter, calls.recording_url
+	// is kept in sync through it.
 	SetCallRecording(ctx context.Context, callID uuid.UUID, rec *domain.RecordingInfo) error
-	// ListCallsForRetention returns calls with a stored recording object
-	// (recording.status "ready" or "failed" with an objectKey) whose
-	// started_at < before, newest first (ORDER BY started_at DESC), at most
-	// limit rows. RunRetention pages with before = last row's StartedAt.
+	// ListCallsForRetention returns up to limit calls with a "ready"
+	// recording that ended before `before` (ended_at, or started_at when not
+	// ended). Oldest-first or newest-first ordering both work (RunRetention).
 	ListCallsForRetention(ctx context.Context, before time.Time, limit int) ([]domain.Call, error)
+}
+
+// RecordingURLSetter is optionally implemented by the CallRepo to persist
+// Call.recordingUrl (URLPath(id) when ready, "" otherwise).
+type RecordingURLSetter interface {
+	SetCallRecordingURL(ctx context.Context, callID uuid.UUID, url string) error
 }
 
 // OrgRepo loads organisations (settings).
@@ -411,22 +416,34 @@ func (s *Service) deleteRecording(ctx context.Context, call *domain.Call) error 
 // RunRetention deletes recordings older than their org's retention period
 // and returns how many were deleted. Failures of single recordings are
 // logged and skipped.
+//
+// It works with ListCallsForRetention returning rows oldest-first (the crm
+// store) or newest-first: while a page yields deletions the same cutoff is
+// queried again (deleted rows drop out); a page without deletions moves the
+// cutoff to its oldest row. With oldest-first ordering a run stops once a
+// full page consists of recordings still within their org's retention.
 func (s *Service) RunRetention(ctx context.Context) (int, error) {
 	now := s.now()
-	cursor := now.Add(-24 * time.Hour) // retention is at least one day
+	cutoff := now.Add(-24 * time.Hour) // retention is at least one day
 	days := map[uuid.UUID]int{}
+	seen := map[uuid.UUID]bool{}
 	deleted := 0
 	for page := 0; page < maxRetentionPages; page++ {
-		calls, err := s.calls.ListCallsForRetention(ctx, cursor, retentionPage)
+		calls, err := s.calls.ListCallsForRetention(ctx, cutoff, retentionPage)
 		if err != nil {
 			return deleted, fmt.Errorf("recording: list calls for retention: %w", err)
 		}
-		prevCursor := cursor
+		oldest, fresh, deletedHere := cutoff, 0, 0
 		for i := range calls {
 			c := &calls[i]
-			if c.StartedAt.Before(cursor) {
-				cursor = c.StartedAt
+			if t := retentionTime(c); t.Before(oldest) {
+				oldest = t
 			}
+			if seen[c.ID] {
+				continue
+			}
+			seen[c.ID] = true
+			fresh++
 			if c.Recording == nil || c.Recording.Status == StatusDeleted || c.Recording.Status == StatusRecording {
 				continue
 			}
@@ -443,9 +460,16 @@ func (s *Service) RunRetention(ctx context.Context) (int, error) {
 				continue
 			}
 			deleted++
+			deletedHere++
 		}
-		if len(calls) < retentionPage || !cursor.Before(prevCursor) {
+		if len(calls) < retentionPage {
 			break
+		}
+		if deletedHere == 0 || fresh == 0 {
+			if !oldest.Before(cutoff) {
+				break
+			}
+			cutoff = oldest
 		}
 		if err := ctx.Err(); err != nil {
 			return deleted, err
@@ -455,6 +479,15 @@ func (s *Service) RunRetention(ctx context.Context) (int, error) {
 		s.log.Info().Int("deleted", deleted).Msg("recording: retention run")
 	}
 	return deleted, nil
+}
+
+// retentionTime is the call time ListCallsForRetention compares with
+// `before` (ended_at, falling back to started_at).
+func retentionTime(c *domain.Call) time.Time {
+	if c.EndedAt != nil {
+		return *c.EndedAt
+	}
+	return c.StartedAt
 }
 
 // RunRetentionEvery runs RunRetention every interval (default 24h) until ctx
@@ -524,11 +557,16 @@ func (s *Service) save(ctx context.Context, call *domain.Call, rec *domain.Recor
 		return fmt.Errorf("recording: store recording of call %s: %w", call.ID, err)
 	}
 	call.Recording = rec
+	url := ""
 	if rec.Status == StatusReady {
-		call.RecordingURL = URLPath(call.ID)
-	} else {
-		call.RecordingURL = ""
+		url = URLPath(call.ID)
 	}
+	if us, ok := s.calls.(RecordingURLSetter); ok && url != call.RecordingURL {
+		if err := us.SetCallRecordingURL(ctx, call.ID, url); err != nil {
+			return fmt.Errorf("recording: store recording url of call %s: %w", call.ID, err)
+		}
+	}
+	call.RecordingURL = url
 	call.UpdatedAt = s.now()
 	s.publish(ctx, call)
 	return nil

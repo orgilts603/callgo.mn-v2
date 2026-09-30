@@ -9,18 +9,27 @@
 # LIVEKIT_WS_URL (set by docker compose from .env).
 #
 # How a recording reaches the CRM (Бичлэг CRM-д хэрхэн хүрэх вэ):
-#   1. An audio-only RoomComposite egress is started for the call room —
-#      either automatically through the SIP dispatch rule's room_config.egress
-#      (infra/scripts/lk-setup.sh with CALLGO_RECORDING=true) or by the backend
-#      (StartRoomCompositeEgress{audio_only:true}) on room_started.
-#   2. Egress writes /out/recordings/<room>-<time>.ogg (local mode) or uploads
-#      to S3 when `storage.s3` below is configured.
-#   3. When the room ends, livekit-server sends the `egress_ended` webhook to
-#      POST /api/livekit/webhook. EgressInfo.file_results[0].location is the
-#      S3 URL, or the local path /out/recordings/<file>.ogg.
-#   4. The backend stores it in Call.recordingUrl (a local path is exposed by
-#      the frontend nginx as /recordings/<file>.ogg — strip the "/out" prefix)
-#      and GET /api/calls/{id}/recording redirects to it.
+#   1. On call.answered the backend (internal/recording) calls
+#      StartRoomCompositeEgress{audio_only, file_outputs:[OGG]} for the call
+#      room when the org has the "recordings" feature and recordCalls != false.
+#   2. Object key: recordings/<orgId>/<yyyy>/<mm>/<callId>.ogg
+#        CALLGO_RECORDINGS_DRIVER=s3    -> the request carries the S3 target
+#          (S3_EGRESS_ENDPOINT, S3_BUCKET, S3_ACCESS_KEY, S3_SECRET_KEY,
+#          S3_REGION, force_path_style) — no storage section needed here;
+#        CALLGO_RECORDINGS_DRIVER=local -> /out/recordings/<key> on the shared
+#          `recordings` volume (backend reads it at CALLGO_RECORDINGS_DIR).
+#   3. When the room ends (or the backend stops the egress on call.ended),
+#      livekit-server sends `egress_ended` to POST /api/livekit/webhook and
+#      the backend marks Call.recording ready (size, duration);
+#      Call.recordingUrl = /api/calls/{id}/recording, which 302-redirects to a
+#      10-minute signed URL (presigned S3 GET or HMAC-signed local link).
+#   4. Nightly retention deletes objects older than
+#      org.settings.recordingRetentionDays (default
+#      CALLGO_RECORDING_RETENTION_DAYS=90).
+#
+# Do not combine backend recordings (CALLGO_RECORDINGS=true) with the
+# dispatch-rule auto egress of lk-setup.sh (room_config.egress): every call
+# would be recorded twice.
 # =============================================================================
 
 redis:
@@ -41,16 +50,19 @@ session_limits:
   file_output_max_duration: 2h
 
 # ---------------------------------------------------------------------------
-# Storage. Without a provider, files are written inside the container at the
-# path given in the request (/out/... is the shared `recordings` volume).
-# For production prefer S3-compatible storage (AWS S3, MinIO, Cloudflare R2):
-# uncomment and fill in; credentials may also come from the AWS_* env vars.
+# Default storage for egresses started WITHOUT an explicit output target
+# (only the lk-setup auto egress; backend requests always carry their own S3
+# target or /out path). Without it, files are written inside the container
+# at the requested path (/out/... is the shared `recordings` volume).
+# Credentials may come from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY /
+# AWS_REGION, which docker-compose sets from S3_ACCESS_KEY / S3_SECRET_KEY /
+# S3_REGION. The MinIO of the compose stack:
 # ---------------------------------------------------------------------------
 # storage:
 #   s3:
 #     access_key: ""
 #     secret: ""
-#     region: ap-northeast-2
-#     endpoint: https://s3.example.mn   # MinIO / R2 / other S3-compatible
+#     region: us-east-1
+#     endpoint: http://minio:9000       # MinIO / R2 / other S3-compatible
 #     bucket: callgo-recordings
 #     force_path_style: true

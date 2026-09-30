@@ -351,6 +351,23 @@ func (s *Service) ResendVerification(ctx context.Context, email string) error {
 	return nil
 }
 
+// ResendVerificationFor emails a new verification link to the signed-in
+// user unless already verified.
+func (s *Service) ResendVerificationFor(ctx context.Context, userID uuid.UUID) error {
+	u, err := s.users.GetUser(ctx, userID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return errNotFound("user")
+	}
+	if err != nil {
+		return fmt.Errorf("get user: %w", err)
+	}
+	if u.EmailVerifiedAt != nil || !userActive(u) {
+		return nil
+	}
+	s.sendVerification(ctx, u)
+	return nil
+}
+
 // ForgotPassword emails a single-use reset link (valid ResetTTL) when the
 // address belongs to an active user. It always succeeds from the caller's
 // point of view (no account enumeration); failures are logged.

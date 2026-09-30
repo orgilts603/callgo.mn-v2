@@ -55,7 +55,9 @@ func errInvalid(format string, args ...any) error {
 	return &Error{Kind: domain.ErrInvalid, Msg: fmt.Sprintf(format, args...)}
 }
 
-func errConflict(msg string) error     { return &Error{Kind: domain.ErrConflict, Msg: msg} }
-func errForbidden(msg string) error    { return &Error{Kind: domain.ErrForbidden, Msg: msg} }
-func errNotFound(what string) error    { return &Error{Kind: domain.ErrNotFound, Msg: what + " not found"} }
+func errConflict(msg string) error  { return &Error{Kind: domain.ErrConflict, Msg: msg} }
+func errForbidden(msg string) error { return &Error{Kind: domain.ErrForbidden, Msg: msg} }
+func errNotFound(what string) error {
+	return &Error{Kind: domain.ErrNotFound, Msg: what + " not found"}
+}
 func errUnauthorized(msg string) error { return &Error{Kind: domain.ErrUnauthorized, Msg: msg} }

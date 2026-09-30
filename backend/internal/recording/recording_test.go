@@ -20,9 +20,24 @@ import (
 // --- fakes -------------------------------------------------------------------
 
 type fakeCalls struct {
-	mu    sync.Mutex
-	calls map[uuid.UUID]*domain.Call
-	sets  int
+	mu          sync.Mutex
+	calls       map[uuid.UUID]*domain.Call
+	sets        int
+	newestFirst bool
+	urls        map[uuid.UUID]string
+}
+
+func (f *fakeCalls) SetCallRecordingURL(_ context.Context, id uuid.UUID, url string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.urls == nil {
+		f.urls = map[uuid.UUID]string{}
+	}
+	f.urls[id] = url
+	if c, ok := f.calls[id]; ok {
+		c.RecordingURL = url
+	}
+	return nil
 }
 
 func newFakeCalls(cs ...*domain.Call) *fakeCalls {
@@ -71,11 +86,6 @@ func (f *fakeCalls) SetCallRecording(_ context.Context, id uuid.UUID, rec *domai
 		r := *rec
 		c.Recording = &r
 	}
-	if rec != nil && rec.Status == StatusReady {
-		c.RecordingURL = URLPath(id)
-	} else {
-		c.RecordingURL = ""
-	}
 	return nil
 }
 
@@ -87,14 +97,20 @@ func (f *fakeCalls) ListCallsForRetention(_ context.Context, before time.Time, l
 		if c.Recording == nil || c.Recording.ObjectKey == "" {
 			continue
 		}
-		if c.Recording.Status != StatusReady && c.Recording.Status != StatusFailed {
+		if c.Recording.Status != StatusReady {
 			continue
 		}
-		if c.StartedAt.Before(before) {
+		if retentionTime(c).Before(before) {
 			out = append(out, *c)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.After(out[j].StartedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		a, b := retentionTime(&out[i]), retentionTime(&out[j])
+		if f.newestFirst {
+			return a.After(b)
+		}
+		return a.Before(b)
+	})
 	if len(out) > limit {
 		out = out[:limit]
 	}
@@ -422,7 +438,16 @@ func TestDeleteWhileRecordingStopsEgress(t *testing.T) {
 }
 
 func TestRunRetention(t *testing.T) {
+	for _, newest := range []bool{false, true} {
+		t.Run(map[bool]string{false: "oldest-first", true: "newest-first"}[newest], func(t *testing.T) {
+			testRunRetention(t, newest)
+		})
+	}
+}
+
+func testRunRetention(t *testing.T, newestFirst bool) {
 	e := newEnv(t, Config{Enabled: true, RetentionDays: 90})
+	e.calls.newestFirst = newestFirst
 	org2 := &domain.Organization{ID: uuid.New(), Settings: map[string]any{SettingRetentionDays: float64(30)}}
 	e.orgs[org2.ID] = org2
 
@@ -438,12 +463,13 @@ func TestRunRetention(t *testing.T) {
 	youngDefault := mk(e.org.ID, 60, StatusReady) // keep (90 days)
 	old2 := mk(org2.ID, 45, StatusReady)          // > 30 → delete
 	young2 := mk(org2.ID, 10, StatusReady)        // keep
-	failedOld := mk(org2.ID, 40, StatusFailed)    // failed with object → delete
+	failedOld := mk(org2.ID, 40, StatusFailed)    // not listed (only ready)
 
 	n, err := e.svc.RunRetention(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, 3, n)
-	for _, c := range []*domain.Call{oldDefault, old2, failedOld} {
+	require.Equal(t, 2, n)
+	require.Equal(t, StatusFailed, e.calls.get(failedOld.ID).Recording.Status)
+	for _, c := range []*domain.Call{oldDefault, old2} {
 		require.Equal(t, StatusDeleted, e.calls.get(c.ID).Recording.Status)
 		_, ok := e.store.objects[c.Recording.ObjectKey]
 		require.False(t, ok)
@@ -458,7 +484,16 @@ func TestRunRetention(t *testing.T) {
 }
 
 func TestRunRetentionPagesBeyondFirstPage(t *testing.T) {
+	for _, newest := range []bool{false, true} {
+		t.Run(map[bool]string{false: "oldest-first", true: "newest-first"}[newest], func(t *testing.T) {
+			testRunRetentionPages(t, newest)
+		})
+	}
+}
+
+func testRunRetentionPages(t *testing.T, newestFirst bool) {
 	e := newEnv(t, enabled)
+	e.calls.newestFirst = newestFirst
 	org2 := &domain.Organization{ID: uuid.New(), Settings: map[string]any{SettingRetentionDays: "7"}}
 	e.orgs[org2.ID] = org2
 	// A full page of young recordings of the 90-day org, then old ones of the 7-day org.

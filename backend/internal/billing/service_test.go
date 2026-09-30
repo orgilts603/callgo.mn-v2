@@ -360,9 +360,16 @@ func TestDunningSuspendsAndPaymentReactivates(t *testing.T) {
 	p, err := f.svc.Pay(f.ctx, f.org.ID, open.ID, "mock")
 	require.NoError(t, err)
 	require.NoError(t, f.pay.MarkPaid(p.ID.String()))
-	got, err := f.svc.HandleCallback(f.ctx, "mock", map[string]string{"payment_id": p.ID.String()}, nil)
+	got, settled, err := f.svc.HandleCallback(f.ctx, "mock", map[string]string{"payment_id": p.ID.String()}, nil)
 	require.NoError(t, err)
+	assert.True(t, settled)
 	assert.Equal(t, domain.PaymentPaid, got.Status)
+	_, settled, err = f.svc.HandleCallback(f.ctx, "mock", map[string]string{"payment_id": p.ID.String()}, nil)
+	require.NoError(t, err)
+	assert.False(t, settled, "repeated callback")
+	// The provider reference resolves too.
+	_, _, err = f.svc.HandleCallback(f.ctx, "mock", map[string]string{"payment_id": p.ProviderRef}, nil)
+	require.NoError(t, err)
 	assert.Equal(t, domain.OrgActive, f.orgStatus(f.org.ID).Status)
 	assert.Equal(t, domain.SubActive, f.sub(f.org.ID).Status)
 	ok, _, err = f.svc.CanStartCall(f.ctx, f.org.ID)
@@ -372,11 +379,11 @@ func TestDunningSuspendsAndPaymentReactivates(t *testing.T) {
 
 func TestHandleCallbackErrors(t *testing.T) {
 	f := newFixture(t)
-	_, err := f.svc.HandleCallback(f.ctx, "qpay", map[string]string{"payment_id": uuid.NewString()}, nil)
+	_, _, err := f.svc.HandleCallback(f.ctx, "qpay", map[string]string{"payment_id": uuid.NewString()}, nil)
 	assert.ErrorIs(t, err, billing.ErrUnknownProvider)
-	_, err = f.svc.HandleCallback(f.ctx, "mock", map[string]string{}, nil)
+	_, _, err = f.svc.HandleCallback(f.ctx, "mock", map[string]string{}, nil)
 	assert.ErrorIs(t, err, domain.ErrInvalid)
-	_, err = f.svc.HandleCallback(f.ctx, "mock", map[string]string{"payment_id": uuid.NewString()}, nil)
+	_, _, err = f.svc.HandleCallback(f.ctx, "mock", map[string]string{"payment_id": uuid.NewString()}, nil)
 	assert.ErrorIs(t, err, domain.ErrNotFound)
 }
 

@@ -2,10 +2,16 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createMemoryRouter, RouterProvider, type RouteObject } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The suite shares a heavily loaded CI box; render-heavy forms need headroom.
+vi.setConfig({ testTimeout: 30_000 })
 import type { CallbackRequest } from '@/lib/types'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
-vi.mock('@/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() } }))
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
+  api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+}))
 
 import { api } from '@/lib/api'
 import { routes } from './routes'

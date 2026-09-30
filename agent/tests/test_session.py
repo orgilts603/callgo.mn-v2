@@ -27,6 +27,7 @@ from livekit.agents.metrics import LLMMetrics, STTMetrics
 
 from callgo_agent import routing
 from callgo_agent import session as sess
+from callgo_agent.config import settings
 from callgo_agent.events import EventEmitter
 from callgo_agent.schemas import (
     AgentProfile,
@@ -1554,6 +1555,7 @@ async def _start_call(
 ) -> tuple[FakeJobContext, FakeClient, asyncio.Task[None]]:
     FakeAgentSession.instances.clear()
     monkeypatch.setattr(sess, "AgentSession", FakeAgentSession)
+    monkeypatch.setattr(settings, "event_flush_interval_ms", 1)
     ctx = FakeJobContext()
     client = client or FakeClient(boot=boot)
     task = asyncio.create_task(
@@ -1569,6 +1571,7 @@ async def _start_call(
 async def _settle(n: int = 20) -> None:
     for _ in range(n):
         await asyncio.sleep(0)
+    await asyncio.sleep(0.02)  # let the emitter flush (interval 1 ms in these tests)
 
 
 def _no_llm_factories(built: list[str]) -> PipelineFactories:
@@ -1658,8 +1661,8 @@ MENU_ROUTE = ResolvedRoute(
 )
 
 
-def _profile_boot(profile_id: UUID, name: str, voice: str, llm_name: str) -> Bootstrap:
-    base = make_bootstrap(llm_cfg=make_llm_config(llm_name, model=f"m-{llm_name}"))
+def _profile_boot(profile_id: UUID, name: str, voice: str, llm_cfg: LLMConfig) -> Bootstrap:
+    base = make_bootstrap(llm_cfg=llm_cfg)
     profile = base.profile.model_copy(
         update={"id": profile_id, "name": name, "tts_voice": voice, "greeting": f"{name} байна."}
     )
@@ -1668,7 +1671,9 @@ def _profile_boot(profile_id: UUID, name: str, voice: str, llm_name: str) -> Boo
 
 async def test_run_call_menu_dtmf_switches_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(update={"route": MENU_ROUTE})
-    sales = _profile_boot(SALES, "Борлуулагч", "mn-voice-2", "sales-llm")
+    sales = _profile_boot(
+        SALES, "Борлуулагч", "mn-voice-2", make_llm_config("sales-llm", model="m-sales-llm")
+    )
     client = FakeClient(boot=boot, by_profile={SALES: sales})
     built: list[str] = []
     default_model = FakeLLM(['{"summary": "x"}'])
@@ -1707,7 +1712,7 @@ async def test_run_call_menu_dtmf_switches_profile(monkeypatch: pytest.MonkeyPat
 
 async def test_run_call_menu_spoken_choice(monkeypatch: pytest.MonkeyPatch) -> None:
     boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(update={"route": MENU_ROUTE})
-    support = _profile_boot(SUPPORT, "Туслах", "", "primary")
+    support = _profile_boot(SUPPORT, "Туслах", "", make_llm_config())
     client = FakeClient(boot=boot, by_profile={SUPPORT: support})
     ctx, client, task = await _start_call(monkeypatch, boot, client=client)
     session = FakeAgentSession.instances[0]
@@ -1788,6 +1793,7 @@ async def test_run_call_handoff_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
     state: CallState = session.kw["userdata"]
     tool = next(t for t in agent.tools if t.info.name == "request_operator")
     await tool(types.SimpleNamespace(session=session))
+    await _settle()
     assert client.of("call.updated")[-1].payload == {"handoff": "requested"}
 
     ctx.room.emit("participant_connected", Operator())
@@ -1826,7 +1832,7 @@ async def test_run_call_without_handoff_ignores_operators(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     boot = make_bootstrap(llm_cfg=make_llm_config())
-    ctx, client, task = await _start_call(monkeypatch, boot)
+    ctx, _client, task = await _start_call(monkeypatch, boot)
     session = FakeAgentSession.instances[0]
     assert "request_operator" not in [t.info.name for t in session.agent.tools]
     assert ctx.room.handlers["participant_connected"] == []

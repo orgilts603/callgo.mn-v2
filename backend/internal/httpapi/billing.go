@@ -33,8 +33,8 @@ type BillingDeps struct {
 	Auth func(http.Handler) http.Handler
 }
 
-// maxCallbackBody bounds provider callback bodies.
-const maxCallbackBody = 64 << 10
+// billingMaxCallbackBody bounds provider callback bodies.
+const billingMaxCallbackBody = 64 << 10
 
 type billingAPI struct {
 	d   BillingDeps
@@ -94,9 +94,9 @@ func (h *billingAPI) fail(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, domain.ErrNotFound):
 		auth.WriteError(w, http.StatusNotFound, "not_found", "not found")
 	case errors.Is(err, domain.ErrConflict):
-		auth.WriteError(w, http.StatusConflict, "conflict", publicMessage(err, domain.ErrConflict))
+		auth.WriteError(w, http.StatusConflict, "conflict", billingPublicMessage(err, domain.ErrConflict))
 	case errors.Is(err, domain.ErrInvalid):
-		auth.WriteError(w, http.StatusBadRequest, "invalid", publicMessage(err, domain.ErrInvalid))
+		auth.WriteError(w, http.StatusBadRequest, "invalid", billingPublicMessage(err, domain.ErrInvalid))
 	case errors.Is(err, domain.ErrUnauthorized):
 		auth.WriteError(w, http.StatusUnauthorized, "unauthorized", "unauthorized")
 	case errors.Is(err, domain.ErrForbidden):
@@ -108,9 +108,9 @@ func (h *billingAPI) fail(w http.ResponseWriter, r *http.Request, err error) {
 	}
 }
 
-// publicMessage returns the part of err's message from the sentinel on
+// billingPublicMessage returns the part of err's message from the sentinel on
 // ("invalid input: plan is not available ..."), hiding wrapping prefixes.
-func publicMessage(err, sentinel error) string {
+func billingPublicMessage(err, sentinel error) string {
 	msg := err.Error()
 	if i := strings.Index(msg, sentinel.Error()); i >= 0 {
 		return msg[i:]
@@ -132,7 +132,7 @@ func (h *billingAPI) audit(ctx context.Context, orgID uuid.UUID, actor *uuid.UUI
 	h.d.Audit(ctx, orgID, actor, action, targetType, targetID, meta)
 }
 
-func actorOf(c auth.Claims) *uuid.UUID {
+func billingActor(c auth.Claims) *uuid.UUID {
 	if c.UserID == uuid.Nil {
 		return nil
 	}
@@ -190,7 +190,7 @@ func (h *billingAPI) changePlan(w http.ResponseWriter, r *http.Request) {
 	if res.PendingPlanCode != "" {
 		meta["effective"] = "period_end"
 	}
-	h.audit(r.Context(), c.OrgID, actorOf(c), "subscription.update", "subscription", res.Subscription.ID.String(), meta)
+	h.audit(r.Context(), c.OrgID, billingActor(c), "subscription.update", "subscription", res.Subscription.ID.String(), meta)
 	writeJSON(w, http.StatusOK, res)
 }
 
@@ -206,7 +206,7 @@ func (h *billingAPI) cancel(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.audit(r.Context(), c.OrgID, actorOf(c), "subscription.cancel", "subscription", sub.ID.String(),
+	h.audit(r.Context(), c.OrgID, billingActor(c), "subscription.cancel", "subscription", sub.ID.String(),
 		map[string]any{"planCode": sub.PlanCode, "status": sub.Status})
 	writeJSON(w, http.StatusOK, map[string]any{"subscription": sub})
 }
@@ -344,7 +344,7 @@ func (h *billingAPI) pay(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	h.audit(r.Context(), c.OrgID, actorOf(c), "invoice.pay", "invoice", id.String(),
+	h.audit(r.Context(), c.OrgID, billingActor(c), "invoice.pay", "invoice", id.String(),
 		map[string]any{"paymentId": p.ID, "provider": p.Provider, "amountMnt": p.AmountMNT})
 	writeJSON(w, http.StatusCreated, map[string]any{"payment": p})
 }
@@ -383,7 +383,7 @@ func (h *billingAPI) webhook(w http.ResponseWriter, r *http.Request) {
 			query[k] = v[0]
 		}
 	}
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCallbackBody))
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, billingMaxCallbackBody))
 	if err != nil {
 		h.fail(w, r, errInvalid("callback body too large"))
 		return

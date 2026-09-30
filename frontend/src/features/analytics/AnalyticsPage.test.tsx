@@ -1,10 +1,14 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { configure, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, HttpError } from '@/lib/api'
 import type { AnalyticsOverview, HeatmapCell } from '@/lib/types'
 import { installChartDom, renderPage, resetAuth, signIn } from '@/app/testing'
 import AnalyticsPage from './AnalyticsPage'
 import { bucketFor, presetRange } from './hooks'
+
+// jsdom + recharts/wavesurfer are slow when the CI box is busy.
+vi.setConfig({ testTimeout: 30_000 })
+configure({ asyncUtilTimeout: 10_000 })
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
