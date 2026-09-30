@@ -314,7 +314,7 @@ services:
       livekit:
         condition: service_started
     healthcheck:
-      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "/tools/busybox", "wget", "-q", "--spider", "http://127.0.0.1:8080/healthz"]
       interval: 10s
       timeout: 3s
       retries: 12

@@ -52,7 +52,8 @@ fi
 case "$CARRIER_NUMBER_FORMAT" in e164|intl|national) ;; *) die "CARRIER_NUMBER_FORMAT must be e164, intl or national" ;; esac
 case "$CARRIER_DID_SOURCE" in ruri|to) ;; *) die "CARRIER_DID_SOURCE must be ruri or to" ;; esac
 
-# Allow-list for envsubst: only these ${VARS} are replaced.
+# Allow-list for envsubst: only these ${VARS} are replaced (literal on purpose).
+# shellcheck disable=SC2016
 VARS='${SIP_EXTERNAL_IP} ${SIP_LOCAL_NET} ${LIVEKIT_SIP_HOST} ${LIVEKIT_SIP_PORT}
 ${SIP_AUTH_USERNAME} ${SIP_AUTH_PASSWORD}
 ${CARRIER_HOST} ${CARRIER_PORT} ${CARRIER_USERNAME} ${CARRIER_PASSWORD}
@@ -107,7 +108,9 @@ if [[ "$testphone" == yes && ${#TEST_PHONE_PASSWORD} -lt 12 ]]; then
   die "TEST_PHONE_PASSWORD must be at least 12 characters"
 fi
 
-mkdir -p /var/spool/asterisk/monitor
+# Persistent AstDB + recordings on the asterisk-spool volume (asterisk.conf).
+mkdir -p /var/spool/asterisk/astdb /var/spool/asterisk/monitor
+chown asterisk:asterisk /var/spool/asterisk/astdb /var/spool/asterisk/monitor 2>/dev/null || true
 
 # Hand over to the image's entrypoint (fixes ownership, drops to user asterisk).
 exec /usr/local/bin/entrypoint.sh "$@"

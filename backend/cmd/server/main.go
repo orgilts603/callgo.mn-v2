@@ -102,6 +102,8 @@ func run() error {
 			SIPOutboundTransport:       cfg.SIP.Transport,
 			SIPAuthUsername:            cfg.SIP.AuthUsername,
 			SIPAuthPassword:            cfg.SIP.AuthPassword,
+			SIPInboundAuthUsername:     cfg.SIP.InboundAuthUsername,
+			SIPInboundAuthPassword:     cfg.SIP.InboundAuthPassword,
 			RingTimeout:                cfg.SIP.RingTimeout,
 			MaxCallDuration:            cfg.SIP.MaxCallDuration,
 		}, log)

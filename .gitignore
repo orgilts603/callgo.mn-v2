@@ -18,3 +18,4 @@ backend/bin/
 .env
 .env.local
 *.log
+.env.bak.*

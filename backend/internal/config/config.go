@@ -64,7 +64,11 @@ type SIP struct {
 	Transport    string
 	AuthUsername string
 	AuthPassword string
-	RingTimeout  time.Duration
+	// InboundAuthUsername / InboundAuthPassword optionally require digest
+	// auth on the LiveKit inbound trunk (Asterisk must send credentials).
+	InboundAuthUsername string
+	InboundAuthPassword string
+	RingTimeout         time.Duration
 	// MaxCallDuration is the hard cap on a single call.
 	MaxCallDuration time.Duration
 }
@@ -294,14 +298,16 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 
 	// SIP.
 	cfg.SIP = SIP{
-		AsteriskHost:     l.str("SIP_ASTERISK_HOST", "localhost"),
-		AsteriskPort:     l.integer("SIP_ASTERISK_PORT", 5060),
-		AllowedAddresses: l.list("SIP_ALLOWED_ADDRESSES", nil),
-		Transport:        strings.ToLower(l.str("SIP_TRANSPORT", "udp")),
-		AuthUsername:     l.str("SIP_AUTH_USERNAME", ""),
-		AuthPassword:     l.str("SIP_AUTH_PASSWORD", ""),
-		RingTimeout:      l.duration("SIP_RING_TIMEOUT", 30*time.Second),
-		MaxCallDuration:  l.duration("SIP_MAX_CALL_DURATION", 20*time.Minute),
+		AsteriskHost:        l.str("SIP_ASTERISK_HOST", "localhost"),
+		AsteriskPort:        l.integer("SIP_ASTERISK_PORT", 5060),
+		AllowedAddresses:    l.list("SIP_ALLOWED_ADDRESSES", nil),
+		Transport:           strings.ToLower(l.str("SIP_TRANSPORT", "udp")),
+		AuthUsername:        l.str("SIP_AUTH_USERNAME", ""),
+		AuthPassword:        l.str("SIP_AUTH_PASSWORD", ""),
+		InboundAuthUsername: l.str("SIP_INBOUND_AUTH_USERNAME", ""),
+		InboundAuthPassword: l.str("SIP_INBOUND_AUTH_PASSWORD", ""),
+		RingTimeout:         l.duration("SIP_RING_TIMEOUT", 30*time.Second),
+		MaxCallDuration:     l.duration("SIP_MAX_CALL_DURATION", 20*time.Minute),
 	}
 
 	// Campaign engine.
