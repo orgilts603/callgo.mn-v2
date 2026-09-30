@@ -56,15 +56,13 @@ type adminHandlers struct {
 	s   *server // error mapping only
 }
 
-type adminActorKey struct{}
-
 // mountAdmin mounts the platform-admin routes under /api/admin. Every route
 // requires a valid token of a user with IsPlatformAdmin.
 func mountAdmin(r chi.Router, d AdminDeps, cfg Config, log zerolog.Logger) {
 	h := &adminHandlers{d: d, cfg: cfg, log: log, s: &server{log: log}}
 	r.Route("/api/admin", func(r chi.Router) {
 		r.Use(auth.RequireAuth(cfg.JWTSecret))
-		r.Use(h.requirePlatformAdmin)
+		r.Use(auth.RequirePlatformAdmin(h.isPlatformAdmin))
 		r.Get("/stats", h.stats)
 		r.Get("/orgs", h.listOrgs)
 		r.Get("/orgs/{id}", h.getOrg)
@@ -81,32 +79,18 @@ func (h *adminHandlers) now() time.Time {
 	return time.Now()
 }
 
-func (h *adminHandlers) requirePlatformAdmin(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, ok := auth.FromContext(r.Context())
-		if !ok {
-			auth.WriteError(w, http.StatusUnauthorized, "unauthorized", "not authenticated")
-			return
-		}
-		if h.d.Users == nil {
-			h.s.writeErr(w, r, errNotConfigured("admin"))
-			return
-		}
-		u, err := h.d.Users.GetUser(r.Context(), c.UserID)
-		if err != nil {
-			if errors.Is(err, domain.ErrNotFound) {
-				auth.WriteError(w, http.StatusForbidden, "forbidden", "platform admin only")
-				return
-			}
-			h.s.writeErr(w, r, err)
-			return
-		}
-		if !u.IsPlatformAdmin || u.Status == domain.UserDisabled {
-			auth.WriteError(w, http.StatusForbidden, "forbidden", "platform admin only")
-			return
-		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), adminActorKey{}, u)))
-	})
+// isPlatformAdmin is the auth.PlatformAdminCheck: the acting user must exist,
+// be enabled and carry IsPlatformAdmin (re-read on every request so revoking
+// the flag takes effect immediately).
+func (h *adminHandlers) isPlatformAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
+	if h.d.Users == nil {
+		return false, errNotConfigured("admin")
+	}
+	u, err := h.d.Users.GetUser(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	return u.IsPlatformAdmin && u.Status != domain.UserDisabled, nil
 }
 
 func (h *adminHandlers) ready() error {
@@ -124,9 +108,14 @@ func (h *adminHandlers) audit(r *http.Request, orgID uuid.UUID, action, targetTy
 		ID: uuid.New(), OrgID: orgID, Action: action, TargetType: targetType, TargetID: targetID,
 		Meta: meta, IP: adminClientIP(r), At: h.now().UTC(),
 	}
-	if u, ok := r.Context().Value(adminActorKey{}).(*domain.User); ok {
-		id := u.ID
-		e.ActorID, e.ActorEmail = &id, u.Email
+	if c, ok := auth.FromContext(r.Context()); ok {
+		id := c.UserID
+		e.ActorID = &id
+		if h.d.Users != nil {
+			if u, err := h.d.Users.GetUser(r.Context(), id); err == nil {
+				e.ActorEmail = u.Email
+			}
+		}
 	}
 	if err := h.d.Audit.Append(r.Context(), e); err != nil {
 		h.log.Warn().Err(err).Str("action", action).Msg("admin audit append failed")
