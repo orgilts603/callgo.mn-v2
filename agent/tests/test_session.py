@@ -35,6 +35,8 @@ from callgo_agent.schemas import (
     Contact,
     Event,
     JobMetadata,
+    KnowledgeHit,
+    KnowledgeInfo,
     LexiconEntry,
     LexiconScope,
     LLMConfig,
@@ -54,6 +56,8 @@ from callgo_agent.session import (
     analyze_call,
     build_instructions,
     build_turn_handling,
+    call_tools,
+    enabled_tool_names,
     end_reason_for_close,
     enforce_max_duration,
     fallback_analysis,
@@ -94,6 +98,8 @@ def make_bootstrap(
     lexicon: list[LexiconEntry] | None = None,
     tools: list[str] | None = None,
     llm_cfg: LLMConfig | None = None,
+    knowledge: KnowledgeInfo | None = None,
+    transfer_number: str = "",
 ) -> Bootstrap:
     return Bootstrap(
         call=Call(
@@ -114,8 +120,10 @@ def make_bootstrap(
             greeting=greeting,
             language=language,
             tools=tools or [],
+            transfer_number=transfer_number,
         ),
         llm=llm_cfg,
+        knowledge=knowledge,
         lexicon=lexicon or [],
         contact=contact,
         campaign=campaign,
@@ -198,6 +206,85 @@ def test_build_instructions_other_language_and_defaults() -> None:
     assert "Always answer in English." in text
     assert "Mongolian" not in text
     assert "outbound call" in text
+
+
+KB_ID = UUID("66666666-6666-6666-6666-666666666666")
+KB_TOOL = KnowledgeInfo(id=KB_ID, name="Гарын авлага", mode="tool")
+KB_CONTEXT = KnowledgeInfo(
+    id=KB_ID, name="Гарын авлага", mode="context", context_text="Ажлын цаг: 09:00-18:00."
+)
+
+
+def test_build_instructions_knowledge_tool_mode() -> None:
+    boot = make_bootstrap(
+        knowledge=KB_TOOL, tools=["transfer_call", "end_call"], transfer_number="+97611"
+    )
+    text = build_instructions(boot)
+    assert "# Company knowledge" in text
+    assert "ALWAYS call lookup_knowledge" in text
+    assert "(transfer_call)" in text
+    assert "# Мэдлэгийн сан" not in text
+    # static knowledge section sits right after the persona, before per-call context
+    assert text.index("# Company knowledge") < text.index("# Customer") < text.index("# Language")
+
+    no_transfer = build_instructions(make_bootstrap(knowledge=KB_TOOL, tools=["transfer_call"]))
+    assert "transfer_call" not in no_transfer  # enabled but no number: not offered
+
+
+def test_build_instructions_knowledge_context_mode() -> None:
+    text = build_instructions(make_bootstrap(knowledge=KB_CONTEXT))
+    assert "# Мэдлэгийн сан" in text
+    assert "Ажлын цаг: 09:00-18:00." in text
+    assert "truncated" not in text
+    assert "lookup_knowledge" not in text and "# Company knowledge" not in text
+
+    cut = build_instructions(
+        make_bootstrap(knowledge=KB_CONTEXT.model_copy(update={"truncated": True}))
+    )
+    assert "has been truncated" in cut
+
+
+def test_build_instructions_without_knowledge() -> None:
+    for knowledge in (None, KB_TOOL.model_copy(update={"mode": "off"})):
+        text = build_instructions(make_bootstrap(knowledge=knowledge))
+        assert "# Company knowledge" not in text and "# Мэдлэгийн сан" not in text
+
+
+def test_enabled_tool_names() -> None:
+    boot = make_bootstrap(tools=["schedule_callback", "transfer_call", "x", "end_call"])
+    assert enabled_tool_names(boot.profile) == ["end_call", "schedule_callback"]
+    boot = make_bootstrap(tools=["transfer_call"], transfer_number="+97611")
+    assert enabled_tool_names(boot.profile) == ["transfer_call"]
+
+
+class FakeSearchClient:
+    def __init__(self) -> None:
+        self.queries: list[tuple[UUID, str, int]] = []
+
+    async def knowledge_search(self, knowledge_base_id: UUID, query: str, k: int = 5) -> list[Any]:
+        self.queries.append((knowledge_base_id, query, k))
+        return [
+            KnowledgeHit(
+                chunk_id=UUID(int=1), document_id=UUID(int=2), content="09:00-18:00", score=0.9
+            )
+        ]
+
+
+async def test_call_tools_adds_lookup_only_in_tool_mode() -> None:
+    client = FakeSearchClient()
+    state = CallState(bootstrap=make_bootstrap(knowledge=KB_TOOL, tools=["end_call"]))
+    tools = call_tools(state, FakeControl(), client)
+    assert [t.info.name for t in tools] == ["end_call", "lookup_knowledge"]  # type: ignore[union-attr]
+
+    lookup = tools[-1]
+    ctx = types.SimpleNamespace(session=types.SimpleNamespace(say=lambda *a, **k: None))
+    assert "09:00-18:00" in await lookup(ctx, question="ажлын цаг")  # type: ignore[operator]
+    assert client.queries == [(KB_ID, "ажлын цаг", 5)]
+    assert (state.knowledge_lookups, state.knowledge_misses) == (1, 0)
+
+    for knowledge in (KB_CONTEXT, None, KB_TOOL.model_copy(update={"mode": "off"})):
+        state = CallState(bootstrap=make_bootstrap(knowledge=knowledge, tools=["end_call"]))
+        assert [t.info.name for t in call_tools(state, FakeControl(), client)] == ["end_call"]  # type: ignore[union-attr]
 
 
 def test_greeting_and_outbound_opening() -> None:
@@ -898,6 +985,25 @@ async def test_finalizer_uses_analysis_outcome_when_none_recorded() -> None:
     assert (payload.outcome, payload.outcome_note) == ("declined", "Сонирхолгүй.")
 
 
+async def test_finalizer_logs_knowledge_lookups_without_touching_summary(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    sink = FakeSink()
+    boot = make_bootstrap(knowledge=KB_TOOL)
+    emitter = EventEmitter(sink, org_id=ORG, call_id=CALL, flush_interval_ms=60_000)
+    rec = CallRecorder(emitter, boot)
+    rec.turns.extend(TURNS)
+    state = CallState(bootstrap=boot)
+    state.record_knowledge_lookup(2)
+    state.record_knowledge_lookup(0)
+    model = FakeLLM(['{"summary": "Ажлын цаг асуув.", "sentiment": "neutral", "intent": "info"}'])
+    fin = CallFinalizer(state=state, recorder=rec, emitter=emitter, model=model)  # type: ignore[arg-type]
+    with caplog.at_level("INFO", logger="callgo.session"):
+        payload = await fin.finalize(CloseReason.PARTICIPANT_DISCONNECTED)
+    assert payload.summary == "Ажлын цаг асуув."
+    assert "knowledge lookups: 2 (1 without results)" in caplog.text
+
+
 async def test_finalizer_respects_tool_end_reason() -> None:
     sink = FakeSink()
     boot = make_bootstrap()
@@ -1219,6 +1325,39 @@ async def test_run_call_happy_path(
     assert ctx.api.room.deleted == ["call-1"]
     assert ctx.shutdown_reasons == ["hangup_customer"]
     assert model.closed and client.closed
+
+
+@pytest.mark.parametrize("knowledge", [KB_TOOL, KB_CONTEXT, None])
+async def test_run_call_knowledge_wiring(
+    monkeypatch: pytest.MonkeyPatch, knowledge: KnowledgeInfo | None
+) -> None:
+    FakeAgentSession.instances.clear()
+    monkeypatch.setattr(sess, "AgentSession", FakeAgentSession)
+    ctx = FakeJobContext()
+    boot = make_bootstrap(llm_cfg=make_llm_config(), tools=["end_call"], knowledge=knowledge)
+    client = FakeClient(boot=boot)
+    model = FakeLLM(['{"summary": "x"}'])
+    task = asyncio.create_task(
+        run_call(ctx, client, factories=make_factories(model))  # type: ignore[arg-type]
+    )
+    for _ in range(100):
+        await asyncio.sleep(0)
+        if FakeAgentSession.instances and FakeAgentSession.instances[0].started:
+            break
+    agent = FakeAgentSession.instances[0].agent
+    names = [t.info.name for t in agent.tools]
+    text = agent.instructions
+    mode = knowledge.mode if knowledge else "off"
+
+    assert ("lookup_knowledge" in names) == (mode == "tool")
+    assert names[0] == "end_call"
+    assert ("# Company knowledge" in text) == (mode == "tool")
+    assert ("# Мэдлэгийн сан" in text) == (mode == "context")
+    assert ("Ажлын цаг: 09:00-18:00." in text) == (mode == "context")
+
+    ctx.room.emit("participant_disconnected", ctx.participant)
+    await asyncio.wait_for(task, 2)
+    assert client.of("call.ended")[0].payload["endReason"] == "hangup_customer"
 
 
 async def test_run_call_session_start_failure(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -8,6 +8,9 @@
 * :func:`analyze_call` — one LLM completion producing ``{summary, sentiment, intent}`` plus,
   for campaigns with outcomes, ``{outcome, outcomeNote}``.
 * :func:`run_call` — the job entrypoint body used by :mod:`callgo_agent.worker`.
+
+Knowledge base (``Bootstrap.knowledge``): ``context`` mode puts the base text in the
+instructions; ``tool`` mode adds ``lookup_knowledge`` (see :mod:`callgo_agent.knowledge`).
 """
 
 from __future__ import annotations
@@ -50,6 +53,13 @@ from pydantic import ValidationError
 
 from .config import settings
 from .events import EventEmitter, utcnow
+from .knowledge import (
+    KnowledgeRetriever,
+    KnowledgeSearcher,
+    active_knowledge,
+    build_lookup_tool,
+    knowledge_instructions,
+)
 from .schemas import (
     AgentProfile,
     Bootstrap,
@@ -67,6 +77,8 @@ from .schemas import (
     TranscriptTurn,
 )
 from .tools import (
+    ALL_TOOLS,
+    TOOL_TRANSFER_CALL,
     CallbackRequest,
     CallControl,
     CallState,
@@ -217,6 +229,14 @@ def _today(tz: str = LOCAL_TZ) -> str:
     return now.strftime("%Y-%m-%d %A %H:%M")
 
 
+def enabled_tool_names(profile: AgentProfile) -> list[str]:
+    """``profile.tools`` that :func:`~callgo_agent.tools.build_tools` will actually build."""
+    wanted = {t.strip() for t in profile.tools}
+    return [
+        t for t in ALL_TOOLS if t in wanted and (t != TOOL_TRANSFER_CALL or profile.transfer_number)
+    ]
+
+
 def build_instructions(bootstrap: Bootstrap, *, now: str | None = None) -> str:
     profile = bootstrap.profile
     variables = template_vars(bootstrap)
@@ -228,6 +248,13 @@ def build_instructions(bootstrap: Bootstrap, *, now: str | None = None) -> str:
             f"You are {profile.name or 'a helpful assistant'}, a voice assistant answering "
             f"phone calls for {bootstrap.org.name}."
         )
+
+    # Static per profile: kept early so a long knowledge text stays in the cached prefix.
+    knowledge = active_knowledge(bootstrap)
+    if knowledge is not None:
+        section = knowledge_instructions(knowledge, enabled_tool_names(profile))
+        if section:
+            sections.append(section)
 
     campaign = bootstrap.campaign
     if campaign is not None and campaign.script.strip():
@@ -1018,6 +1045,14 @@ class CallFinalizer:
                 analysis.intent or "-",
                 outcome or "-",
             )
+            if self.state.knowledge_lookups:
+                # Metrics only: the summary is customer-facing and stays untouched.
+                log.info(
+                    "call %s knowledge lookups: %d (%d without results)",
+                    self.state.bootstrap.call.id,
+                    self.state.knowledge_lookups,
+                    self.state.knowledge_misses,
+                )
             return self.payload
 
 
@@ -1068,6 +1103,27 @@ async def enforce_max_duration(
     except Exception as exc:  # noqa: BLE001
         log.debug("max-duration goodbye not played: %s", exc)
     session.shutdown(drain=False)
+
+
+def call_tools(
+    state: CallState, control: CallControl, searcher: KnowledgeSearcher
+) -> list[llm.Tool]:
+    """Profile-gated tools plus ``lookup_knowledge`` when the knowledge mode is ``tool``."""
+    tools: list[llm.Tool] = list(build_tools(state, control))
+    knowledge = active_knowledge(state.bootstrap)
+    if knowledge is not None and knowledge.mode == "tool":
+        retriever = KnowledgeRetriever(searcher, knowledge.id)
+        tools.append(build_lookup_tool(retriever, on_lookup=state.record_knowledge_lookup))
+        log.info("knowledge base %s (%s) enabled as a tool", knowledge.id, knowledge.name)
+    elif knowledge is not None:
+        log.info(
+            "knowledge base %s (%s) in context mode: %d chars%s",
+            knowledge.id,
+            knowledge.name,
+            len(knowledge.context_text),
+            " (truncated)" if knowledge.truncated else "",
+        )
+    return tools
 
 
 async def run_call(
@@ -1190,7 +1246,7 @@ async def run_call(
 
     agent = CallGoAgent(
         bootstrap=boot,
-        tools=build_tools(state, control),
+        tools=call_tools(state, control, client),
         on_stt_final=recorder.on_stt_final,
     )
     recorder.mark_answered()

@@ -28,6 +28,19 @@ type Deps struct {
 	// "not configured" and dialing / campaign import skip the check.
 	DNC domain.DoNotCallRepository
 
+	// Knowledge is the knowledge-base (RAG) service. When nil the
+	// /api/knowledge-* endpoints answer "not configured", the internal
+	// knowledge search fails the same way and bootstrap sends knowledge=null.
+	Knowledge KnowledgeService
+	// KnowledgeRepo lists, reads and deletes knowledge documents. When nil
+	// the document endpoints answer "not configured" (GET base returns an
+	// empty document list).
+	KnowledgeRepo domain.KnowledgeRepository
+	// Chunks pages a document's chunks for the preview in
+	// GET /api/knowledge-documents/{id}. When nil, KnowledgeRepo is
+	// type-asserted to ChunkLister; failing that the preview is empty.
+	Chunks ChunkLister
+
 	Telephony domain.Telephony
 	Bus       domain.EventBus
 
@@ -164,6 +177,35 @@ type LLMTester interface {
 // OrgCreator persists a new organisation (fills ID/CreatedAt when zero).
 type OrgCreator interface {
 	CreateOrg(ctx context.Context, o *domain.Organization) error
+}
+
+// KnowledgeService manages knowledge bases and runs ingestion and search
+// (implemented by internal/knowledge). Errors wrap domain.ErrNotFound,
+// domain.ErrInvalid (bad input) and domain.ErrConflict (e.g. changing the
+// embedding settings of a base that already has chunks).
+type KnowledgeService interface {
+	CreateBase(ctx context.Context, kb *domain.KnowledgeBase) error
+	UpdateBase(ctx context.Context, kb *domain.KnowledgeBase) error
+	DeleteBase(ctx context.Context, id uuid.UUID) error
+	GetBase(ctx context.Context, id uuid.UUID) (*domain.KnowledgeBase, error)
+	ListBases(ctx context.Context, orgID uuid.UUID) ([]domain.KnowledgeBase, error)
+	// AddDocument stores an uploaded file (status processing) and ingests it
+	// in the background. r is only valid until AddDocument returns.
+	AddDocument(ctx context.Context, kbID uuid.UUID, filename, mime string, r io.Reader) (*domain.KnowledgeDocument, error)
+	// AddText stores pasted text as a document and ingests it in the background.
+	AddText(ctx context.Context, kbID uuid.UUID, filename, text string) (*domain.KnowledgeDocument, error)
+	// Reprocess re-runs ingestion of a document in the background.
+	Reprocess(ctx context.Context, docID uuid.UUID) error
+	// Search returns the k best hits and the mode used ("hybrid" or "text").
+	Search(ctx context.Context, kbID uuid.UUID, query string, k int) (hits []domain.KnowledgeHit, mode string, err error)
+	// ContextText returns the base's text for knowledgeMode "context",
+	// capped (truncated=true when cut).
+	ContextText(ctx context.Context, kbID uuid.UUID) (text string, truncated bool, err error)
+}
+
+// ChunkLister pages a document's chunks in seq order and returns the total.
+type ChunkLister interface {
+	ListChunks(ctx context.Context, docID uuid.UUID, limit, offset int) ([]domain.KnowledgeChunk, int, error)
 }
 
 // CampaignDeleter removes a campaign and its targets.

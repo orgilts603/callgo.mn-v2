@@ -14,7 +14,11 @@ import (
 var allTables = []string{
 	"organizations", "users", "llm_configs", "agent_profiles", "sip_numbers", "contacts",
 	"calls", "call_transcripts", "campaigns", "campaign_targets", "lexicon_corrections", "do_not_call",
+	"knowledge_bases", "knowledge_documents", "knowledge_chunks",
 }
+
+// latestVersion is the number of the newest embedded migration.
+const latestVersion = 4
 
 // columnExists reports whether table.column exists in the public schema.
 func columnExists(t *testing.T, ctx context.Context, table, column string) bool {
@@ -64,11 +68,11 @@ func TestMigrationsUpDownIdempotent(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, testPool.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
-	require.Equal(t, 2, version)
+	require.Equal(t, latestVersion, version)
 	require.False(t, dirty)
 }
 
-// TestMigrationCampaignV2DownUp steps 000002 down and up again on a schema
+// TestMigrationCampaignV2DownUp migrates down to 000001 and up again on a schema
 // holding v2 data (a skipped target) and checks the v2 columns come and go.
 func TestMigrationCampaignV2DownUp(t *testing.T) {
 	ctx, s := setup(t)
@@ -94,7 +98,7 @@ func TestMigrationCampaignV2DownUp(t *testing.T) {
 		}
 	}
 
-	require.NoError(t, runMigrations(ctx, testDSN, func(m *migrate.Migrate) error { return m.Steps(-1) }))
+	require.NoError(t, runMigrations(ctx, testDSN, func(m *migrate.Migrate) error { return m.Migrate(1) }))
 	testPool.Reset()
 	for tbl, cols := range v2Cols {
 		for _, col := range cols {

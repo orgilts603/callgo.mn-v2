@@ -79,6 +79,7 @@ func (s *server) routes() http.Handler {
 		r.Get("/bootstrap", s.agentBootstrap)
 		r.Post("/events", s.agentEvents)
 		r.Post("/lexicon-hit", s.agentLexiconHit)
+		r.Post("/knowledge/search", s.agentKnowledgeSearch)
 	})
 
 	admin := auth.RequireRole(domain.RoleOwner, domain.RoleAdmin)
@@ -159,6 +160,23 @@ func (s *server) routes() http.Handler {
 				r.With(admin).Post("/", s.createProfile)
 				r.With(admin).Put("/{id}", s.updateProfile)
 				r.With(admin).Delete("/{id}", s.deleteProfile)
+			})
+
+			r.Route("/knowledge-bases", func(r chi.Router) {
+				r.Get("/", s.listKnowledgeBases)
+				r.Get("/{id}", s.getKnowledgeBaseHandler)
+				r.Get("/{id}/documents", s.listKnowledgeDocuments)
+				r.Post("/{id}/search", s.searchKnowledgeBase)
+				r.With(admin).Post("/", s.createKnowledgeBase)
+				r.With(admin).Put("/{id}", s.updateKnowledgeBase)
+				r.With(admin).Delete("/{id}", s.deleteKnowledgeBase)
+				r.With(admin).Post("/{id}/documents", s.createKnowledgeDocument)
+			})
+
+			r.Route("/knowledge-documents", func(r chi.Router) {
+				r.Get("/{docId}", s.getKnowledgeDocument)
+				r.With(admin).Delete("/{docId}", s.deleteKnowledgeDocument)
+				r.With(admin).Post("/{docId}/reprocess", s.reprocessKnowledgeDocument)
 			})
 
 			r.Route("/llm-configs", func(r chi.Router) {

@@ -38,6 +38,7 @@ type env struct {
 	dnc    *fakeDNC
 	lex    *fakeLexiconEngine
 	tester *fakeTester
+	kn     *fakeKnowledge
 	srv    *server
 	h      http.Handler
 
@@ -50,7 +51,7 @@ func newEnv(t *testing.T, mutate ...func(*Deps, *Config)) *env {
 	t.Helper()
 	db := newFakeDB()
 	e := &env{t: t, db: db, tel: &fakeTelephony{}, bus: &fakeBus{}, hub: &fakeHub{}, ctl: &fakeCampaigns{db: db}, dnc: newFakeDNC(),
-		lex: &fakeLexiconEngine{}, tester: &fakeTester{}}
+		lex: &fakeLexiconEngine{}, tester: &fakeTester{}, kn: newFakeKnowledge()}
 	ctx := context.Background()
 	now := time.Now().UTC()
 	e.org = domain.Organization{ID: uuid.New(), Name: "Demo", Slug: "demo", CreatedAt: now}
@@ -74,6 +75,7 @@ func newEnv(t *testing.T, mutate ...func(*Deps, *Config)) *env {
 		DNC:       e.dnc,
 		Telephony: e.tel, Bus: e.bus, Live: e.hub, Campaigns: e.ctl, TargetParser: listParser{}, ContactParser: listParser{},
 		LexiconEngine: e.lex, LLMTester: e.tester,
+		Knowledge: e.kn, KnowledgeRepo: e.kn,
 	}
 	cfg := Config{JWTSecret: testJWT, AgentToken: testAgentToken, LiveKitAPIKey: testLKKey, LiveKitAPISecret: testLKSecret}
 	for _, m := range mutate {

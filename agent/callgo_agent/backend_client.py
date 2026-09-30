@@ -5,6 +5,7 @@ Endpoints (all under ``/internal/agent``, header ``X-Agent-Token``):
 * ``GET  /bootstrap``   -> :class:`~callgo_agent.schemas.Bootstrap`
 * ``POST /events``      ``{"events": [Event...]}`` -> ``{"accepted": N}``
 * ``POST /lexicon-hit`` ``{"ids": [uuid]}`` -> 204
+* ``POST /knowledge/search`` ``{"knowledgeBaseId", "query", "k"}`` -> ``{"hits": [KnowledgeHit]}``
 
 Transient failures (connection errors, timeouts, HTTP 429 and 5xx) are retried with
 exponential backoff and jitter; other 4xx responses fail fast with :class:`BackendError`.
@@ -24,7 +25,7 @@ import httpx
 from pydantic import ValidationError
 
 from .config import settings
-from .schemas import Bootstrap, CallDirection, Event, EventBatch
+from .schemas import Bootstrap, CallDirection, Event, EventBatch, KnowledgeHit
 
 log = logging.getLogger("callgo.backend_client")
 
@@ -32,8 +33,11 @@ TOKEN_HEADER = "X-Agent-Token"
 BOOTSTRAP_PATH = "/internal/agent/bootstrap"
 EVENTS_PATH = "/internal/agent/events"
 LEXICON_HIT_PATH = "/internal/agent/lexicon-hit"
+KNOWLEDGE_SEARCH_PATH = "/internal/agent/knowledge/search"
 
 DEFAULT_TIMEOUT = httpx.Timeout(10.0, connect=3.0)
+# Knowledge search runs while the caller waits on the line: fail fast, per attempt.
+KNOWLEDGE_SEARCH_TIMEOUT = httpx.Timeout(2.5, connect=1.0)
 RETRY_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
@@ -149,6 +153,28 @@ class BackendClient:
             return
         await self._request("POST", LEXICON_HIT_PATH, json={"ids": id_list})
 
+    async def knowledge_search(
+        self, knowledge_base_id: UUID, query: str, k: int = 5
+    ) -> list[KnowledgeHit]:
+        """Hybrid search over a knowledge base; best hits first (scores in ``[0, 1]``)."""
+        body = {"knowledgeBaseId": str(knowledge_base_id), "query": query, "k": k}
+        resp = await self._request(
+            "POST", KNOWLEDGE_SEARCH_PATH, json=body, timeout=KNOWLEDGE_SEARCH_TIMEOUT
+        )
+        try:
+            data = resp.json()
+        except ValueError as exc:
+            raise BackendError(f"invalid knowledge search response: {exc}") from exc
+        raw_hits = data.get("hits") if isinstance(data, Mapping) else None
+        if raw_hits is None:
+            return []
+        if not isinstance(raw_hits, list):
+            raise BackendError("invalid knowledge search response: 'hits' is not a list")
+        try:
+            return [KnowledgeHit.model_validate(h) for h in raw_hits]
+        except ValidationError as exc:
+            raise BackendError(f"invalid knowledge search response: {exc}") from exc
+
     # ---- transport -----------------------------------------------------------------
 
     def _backoff(self, attempt: int) -> float:
@@ -162,11 +188,13 @@ class BackendClient:
         *,
         params: Mapping[str, str] | None = None,
         json: Any = None,
+        timeout: float | httpx.Timeout | None = None,
     ) -> httpx.Response:
+        extra: dict[str, Any] = {} if timeout is None else {"timeout": timeout}
         attempt = 0
         while True:
             try:
-                resp = await self._http.request(method, path, params=params, json=json)
+                resp = await self._http.request(method, path, params=params, json=json, **extra)
             except httpx.TransportError as exc:
                 if attempt >= self._max_retries:
                     raise BackendError(

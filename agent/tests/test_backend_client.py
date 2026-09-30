@@ -239,3 +239,97 @@ async def test_defaults_come_from_settings(monkeypatch: pytest.MonkeyPatch) -> N
             assert client.base_url == "http://x.test:9"
             await client.lexicon_hit(["a"])
     assert route.calls.last.request.headers["X-Agent-Token"] == "tok"
+
+
+KB_ID = UUID("66666666-6666-6666-6666-666666666666")
+
+
+def _hit_json(content: str, score: float) -> dict[str, object]:
+    return {
+        "chunkId": str(uuid4()),
+        "documentId": str(uuid4()),
+        "filename": "price.pdf",
+        "heading": "Хүргэлт",
+        "content": content,
+        "score": score,
+    }
+
+
+@respx.mock(base_url=BASE)
+async def test_knowledge_search_posts_camel_case_and_parses_hits(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route = respx_mock.post("/internal/agent/knowledge/search").mock(
+        return_value=httpx.Response(
+            200, json={"hits": [_hit_json("5000₮", 0.8), _hit_json("Үнэгүй", 0.4)]}
+        )
+    )
+    async with make_client() as client:
+        hits = await client.knowledge_search(KB_ID, "хүргэлтийн үнэ", k=3)
+
+    req = route.calls.last.request
+    assert req.headers["X-Agent-Token"] == "secret-token"
+    assert json.loads(req.content) == {
+        "knowledgeBaseId": str(KB_ID),
+        "query": "хүргэлтийн үнэ",
+        "k": 3,
+    }
+    timeout = req.extensions["timeout"]
+    assert timeout["read"] == 2.5 and timeout["connect"] == 1.0
+    assert [h.content for h in hits] == ["5000₮", "Үнэгүй"]
+    assert hits[0].filename == "price.pdf" and hits[0].heading == "Хүргэлт"
+    assert hits[0].score == 0.8
+
+
+@respx.mock(base_url=BASE)
+async def test_knowledge_search_default_k_and_empty_hits(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post("/internal/agent/knowledge/search").mock(
+        side_effect=[httpx.Response(200, json={"hits": []}), httpx.Response(200, json={})]
+    )
+    async with make_client() as client:
+        assert await client.knowledge_search(KB_ID, "q") == []
+        assert await client.knowledge_search(KB_ID, "q") == []
+    assert json.loads(route.calls[0].request.content)["k"] == 5
+
+
+@respx.mock(base_url=BASE)
+async def test_knowledge_search_retries_timeouts_then_succeeds(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route = respx_mock.post("/internal/agent/knowledge/search").mock(
+        side_effect=[
+            httpx.ReadTimeout("slow"),
+            httpx.Response(503),
+            httpx.Response(200, json={"hits": [_hit_json("ok", 0.5)]}),
+        ]
+    )
+    async with make_client(max_retries=3) as client:
+        hits = await client.knowledge_search(KB_ID, "q")
+    assert [h.content for h in hits] == ["ok"]
+    assert route.call_count == 3
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, text="not json"),
+        httpx.Response(200, json={"hits": {"a": 1}}),
+        httpx.Response(200, json={"hits": [{"content": "missing ids"}]}),
+        httpx.Response(404, json={"error": "knowledge base not found"}),
+    ],
+)
+async def test_knowledge_search_errors(response: httpx.Response) -> None:
+    with respx.mock(base_url=BASE) as router:
+        route = router.post("/internal/agent/knowledge/search").mock(return_value=response)
+        async with make_client() as client:
+            with pytest.raises(BackendError):
+                await client.knowledge_search(KB_ID, "q")
+    assert route.call_count == 1
+
+
+@respx.mock(base_url=BASE)
+async def test_other_endpoints_keep_default_timeout(respx_mock: respx.MockRouter) -> None:
+    route = respx_mock.post("/internal/agent/lexicon-hit").mock(return_value=httpx.Response(204))
+    async with make_client() as client:
+        await client.lexicon_hit(["a"])
+    assert route.calls.last.request.extensions["timeout"]["read"] == 10.0

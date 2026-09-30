@@ -369,3 +369,22 @@ def test_call_state_record_outcome_without_campaign() -> None:
     assert state.outcomes == []
     assert state.record_outcome("agreed", "x") == ""
     assert (state.outcome, state.outcome_note) == ("", "")
+
+
+def test_knowledge_lookup_metrics() -> None:
+    state = CallState(bootstrap=make_bootstrap())
+    assert (state.knowledge_lookups, state.knowledge_misses) == (0, 0)
+    state.record_knowledge_lookup(3)
+    state.record_knowledge_lookup(0)
+    state.record_knowledge_lookup(1)
+    assert (state.knowledge_lookups, state.knowledge_misses) == (3, 1)
+
+
+def test_lookup_knowledge_in_profile_tools_is_not_built_nor_warned(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # lookup_knowledge follows the profile's knowledge mode (session wiring), not profile.tools
+    state = CallState(bootstrap=make_bootstrap(tools=["lookup_knowledge", "end_call"]))
+    with caplog.at_level("WARNING", logger="callgo.tools"):
+        assert names(build_tools(state, FakeControl())) == ["end_call"]
+    assert "unknown tool" not in caplog.text

@@ -6,6 +6,8 @@
 * ``schedule_callback`` remember a requested callback; reported in the call summary
 * ``record_outcome``    commit the campaign outcome mid-call; auto-enabled (not via
   ``profile.tools``) whenever the campaign defines outcomes
+* ``lookup_knowledge``  knowledge-base search (:mod:`callgo_agent.knowledge`); enabled by the
+  profile's ``knowledgeMode == "tool"``, not via ``profile.tools``
 
 Tools only touch :class:`CallState` (per-call mutable data shared with the session) and a
 :class:`CallControl` (hang-up / transfer), so they are testable without LiveKit.
@@ -33,14 +35,15 @@ TOOL_TRANSFER_CALL = "transfer_call"
 TOOL_LOOKUP_CONTACT = "lookup_contact"
 TOOL_SCHEDULE_CALLBACK = "schedule_callback"
 TOOL_RECORD_OUTCOME = "record_outcome"
+TOOL_LOOKUP_KNOWLEDGE = "lookup_knowledge"
 ALL_TOOLS: tuple[str, ...] = (
     TOOL_END_CALL,
     TOOL_TRANSFER_CALL,
     TOOL_LOOKUP_CONTACT,
     TOOL_SCHEDULE_CALLBACK,
 )
-# Enabled by the campaign (outcomes defined), never by ``profile.tools``.
-AUTO_TOOLS: tuple[str, ...] = (TOOL_RECORD_OUTCOME,)
+# Enabled by the campaign (outcomes defined) or the knowledge mode, never by ``profile.tools``.
+AUTO_TOOLS: tuple[str, ...] = (TOOL_RECORD_OUTCOME, TOOL_LOOKUP_KNOWLEDGE)
 
 OUTCOME_NOTE_MAX_CHARS = 200
 
@@ -112,6 +115,15 @@ class CallState:
     # It takes precedence over the post-call analysis.
     outcome: str = ""
     outcome_note: str = ""
+    # ``lookup_knowledge`` metrics: searches that completed, and how many found nothing.
+    knowledge_lookups: int = 0
+    knowledge_misses: int = 0
+
+    def record_knowledge_lookup(self, hits: int) -> None:
+        """Count one completed knowledge search that returned ``hits`` usable passages."""
+        self.knowledge_lookups += 1
+        if hits <= 0:
+            self.knowledge_misses += 1
 
     def set_end_reason(self, reason: EndReason) -> bool:
         """Record why the call ends; the first reason wins. Returns True if it was set."""

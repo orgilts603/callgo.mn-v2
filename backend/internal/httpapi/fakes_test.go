@@ -1005,3 +1005,272 @@ func (f *fakeTester) Test(_ context.Context, cfg domain.LLMConfig, prompt string
 	}
 	return "pong: " + prompt, 12 * time.Millisecond, nil
 }
+
+// fakeKnowledge implements KnowledgeService, domain.KnowledgeRepository and
+// ChunkLister in memory.
+type fakeKnowledge struct {
+	mu     sync.Mutex
+	bases  map[uuid.UUID]domain.KnowledgeBase
+	docs   map[uuid.UUID]domain.KnowledgeDocument
+	chunks map[uuid.UUID][]domain.KnowledgeChunk
+
+	uploads     map[uuid.UUID][]byte // doc ID → uploaded bytes / text
+	reprocessed []uuid.UUID
+	lastQuery   string
+	lastK       int
+	lastKB      uuid.UUID
+	hits        []domain.KnowledgeHit
+	mode        string
+	contextText string
+	truncated   bool
+
+	updateErr  error
+	getBaseErr error
+	contextErr error
+}
+
+func newFakeKnowledge() *fakeKnowledge {
+	return &fakeKnowledge{
+		bases: map[uuid.UUID]domain.KnowledgeBase{}, docs: map[uuid.UUID]domain.KnowledgeDocument{},
+		chunks: map[uuid.UUID][]domain.KnowledgeChunk{}, uploads: map[uuid.UUID][]byte{}, mode: "hybrid",
+	}
+}
+
+// --- KnowledgeService ---
+
+func (k *fakeKnowledge) CreateBase(ctx context.Context, kb *domain.KnowledgeBase) error {
+	if kb.EmbeddingModel == "" {
+		kb.EmbeddingModel = "text-embedding-3-small"
+	}
+	return k.CreateKnowledgeBase(ctx, kb)
+}
+
+func (k *fakeKnowledge) UpdateBase(ctx context.Context, kb *domain.KnowledgeBase) error {
+	if k.updateErr != nil {
+		return k.updateErr
+	}
+	return k.UpdateKnowledgeBase(ctx, kb)
+}
+
+func (k *fakeKnowledge) DeleteBase(ctx context.Context, id uuid.UUID) error {
+	return k.DeleteKnowledgeBase(ctx, id)
+}
+
+func (k *fakeKnowledge) GetBase(ctx context.Context, id uuid.UUID) (*domain.KnowledgeBase, error) {
+	if k.getBaseErr != nil {
+		return nil, k.getBaseErr
+	}
+	return k.GetKnowledgeBase(ctx, id)
+}
+
+func (k *fakeKnowledge) ListBases(ctx context.Context, orgID uuid.UUID) ([]domain.KnowledgeBase, error) {
+	return k.ListKnowledgeBases(ctx, orgID)
+}
+
+func (k *fakeKnowledge) addDoc(kbID uuid.UUID, filename, mimeType string, content []byte) (*domain.KnowledgeDocument, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	kb, ok := k.bases[kbID]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	now := time.Now().UTC()
+	d := domain.KnowledgeDocument{ID: uuid.New(), KnowledgeBaseID: kbID, OrgID: kb.OrgID, Filename: filename, MimeType: mimeType,
+		SizeBytes: int64(len(content)), Status: domain.DocumentProcessing, CreatedAt: now, UpdatedAt: now}
+	k.docs[d.ID] = d
+	k.uploads[d.ID] = content
+	kb.DocumentCount++
+	k.bases[kbID] = kb
+	return &d, nil
+}
+
+func (k *fakeKnowledge) AddDocument(_ context.Context, kbID uuid.UUID, filename, mimeType string, r io.Reader) (*domain.KnowledgeDocument, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return nil, err
+	}
+	return k.addDoc(kbID, filename, mimeType, b)
+}
+
+func (k *fakeKnowledge) AddText(_ context.Context, kbID uuid.UUID, filename, text string) (*domain.KnowledgeDocument, error) {
+	return k.addDoc(kbID, filename, "text/plain", []byte(text))
+}
+
+func (k *fakeKnowledge) Reprocess(_ context.Context, docID uuid.UUID) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	d, ok := k.docs[docID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	d.Status = domain.DocumentProcessing
+	k.docs[docID] = d
+	k.reprocessed = append(k.reprocessed, docID)
+	return nil
+}
+
+func (k *fakeKnowledge) Search(_ context.Context, kbID uuid.UUID, query string, n int) ([]domain.KnowledgeHit, string, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if _, ok := k.bases[kbID]; !ok {
+		return nil, "", domain.ErrNotFound
+	}
+	k.lastKB, k.lastQuery, k.lastK = kbID, query, n
+	return append([]domain.KnowledgeHit(nil), k.hits...), k.mode, nil
+}
+
+func (k *fakeKnowledge) ContextText(context.Context, uuid.UUID) (string, bool, error) {
+	if k.contextErr != nil {
+		return "", false, k.contextErr
+	}
+	return k.contextText, k.truncated, nil
+}
+
+// --- domain.KnowledgeRepository ---
+
+func (k *fakeKnowledge) CreateKnowledgeBase(_ context.Context, kb *domain.KnowledgeBase) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	ensureID(&kb.ID)
+	k.bases[kb.ID] = *kb
+	return nil
+}
+
+func (k *fakeKnowledge) UpdateKnowledgeBase(_ context.Context, kb *domain.KnowledgeBase) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if _, ok := k.bases[kb.ID]; !ok {
+		return domain.ErrNotFound
+	}
+	k.bases[kb.ID] = *kb
+	return nil
+}
+
+func (k *fakeKnowledge) DeleteKnowledgeBase(_ context.Context, id uuid.UUID) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if _, ok := k.bases[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(k.bases, id)
+	for did, d := range k.docs {
+		if d.KnowledgeBaseID == id {
+			delete(k.docs, did)
+			delete(k.chunks, did)
+		}
+	}
+	return nil
+}
+
+func (k *fakeKnowledge) GetKnowledgeBase(_ context.Context, id uuid.UUID) (*domain.KnowledgeBase, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	kb, ok := k.bases[id]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	return &kb, nil
+}
+
+func (k *fakeKnowledge) ListKnowledgeBases(_ context.Context, orgID uuid.UUID) ([]domain.KnowledgeBase, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	var out []domain.KnowledgeBase
+	for _, kb := range k.bases {
+		if kb.OrgID == orgID {
+			out = append(out, kb)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (k *fakeKnowledge) CreateDocument(_ context.Context, d *domain.KnowledgeDocument) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	ensureID(&d.ID)
+	k.docs[d.ID] = *d
+	return nil
+}
+
+func (k *fakeKnowledge) UpdateDocument(_ context.Context, d *domain.KnowledgeDocument) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if _, ok := k.docs[d.ID]; !ok {
+		return domain.ErrNotFound
+	}
+	k.docs[d.ID] = *d
+	return nil
+}
+
+func (k *fakeKnowledge) DeleteDocument(_ context.Context, id uuid.UUID) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if _, ok := k.docs[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(k.docs, id)
+	delete(k.chunks, id)
+	return nil
+}
+
+func (k *fakeKnowledge) GetDocument(_ context.Context, id uuid.UUID) (*domain.KnowledgeDocument, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	d, ok := k.docs[id]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	return &d, nil
+}
+
+func (k *fakeKnowledge) ListDocuments(_ context.Context, kbID uuid.UUID) ([]domain.KnowledgeDocument, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	var out []domain.KnowledgeDocument
+	for _, d := range k.docs {
+		if d.KnowledgeBaseID == kbID {
+			out = append(out, d)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Filename < out[j].Filename })
+	return out, nil
+}
+
+func (k *fakeKnowledge) ReplaceChunks(_ context.Context, docID uuid.UUID, chunks []domain.KnowledgeChunk) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.chunks[docID] = append([]domain.KnowledgeChunk(nil), chunks...)
+	return nil
+}
+
+func (k *fakeKnowledge) SearchVector(context.Context, uuid.UUID, []float32, int) ([]domain.KnowledgeHit, error) {
+	return nil, nil
+}
+
+func (k *fakeKnowledge) SearchText(context.Context, uuid.UUID, string, int) ([]domain.KnowledgeHit, error) {
+	return nil, nil
+}
+
+func (k *fakeKnowledge) AllChunksText(context.Context, uuid.UUID, int) (string, bool, error) {
+	return "", false, nil
+}
+
+// --- ChunkLister ---
+
+func (k *fakeKnowledge) ListChunks(_ context.Context, docID uuid.UUID, limit, offset int) ([]domain.KnowledgeChunk, int, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	all := k.chunks[docID]
+	if offset >= len(all) {
+		return nil, len(all), nil
+	}
+	end := min(offset+limit, len(all))
+	return append([]domain.KnowledgeChunk(nil), all[offset:end]...), len(all), nil
+}
+
+func (k *fakeKnowledge) uploaded(docID uuid.UUID) []byte {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	return k.uploads[docID]
+}

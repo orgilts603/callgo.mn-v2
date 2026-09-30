@@ -59,6 +59,7 @@ type bootstrapResponse struct {
 	Lexicon      []lexiconEntry       `json:"lexicon"`
 	Contact      *domain.Contact      `json:"contact"`
 	Campaign     *campaignInfo        `json:"campaign"`
+	Knowledge    *knowledgeInfo       `json:"knowledge"`
 }
 
 func (s *server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
@@ -194,6 +195,11 @@ func (s *server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		call.AgentProfileID, changed = &profile.ID, true
 	}
 
+	if profile.KnowledgeMode == "" {
+		profile.KnowledgeMode = domain.KnowledgeOff
+	}
+	knowledge := s.bootstrapKnowledge(ctx, call.OrgID, profile)
+
 	llm, fallbacks, err := s.resolveLLM(ctx, call.OrgID, profile)
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -239,6 +245,7 @@ func (s *server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, bootstrapResponse{
 		Call: call, Org: org, SIPNumber: num, Profile: profile,
 		LLM: withKey(llm), LLMFallbacks: fallbacks, Lexicon: lex, Contact: contact, Campaign: campInfo,
+		Knowledge: knowledge,
 	})
 }
 
@@ -308,6 +315,7 @@ func (s *server) resolveProfile(ctx context.Context, call *domain.Call, num *dom
 		Language:       defaultLanguage,
 		MaxDurationSec: defaultMaxDurationSec,
 		Tools:          []string{"end_call"},
+		KnowledgeMode:  domain.KnowledgeOff,
 	}, nil
 }
 

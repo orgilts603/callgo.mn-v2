@@ -37,6 +37,7 @@ var (
 	_ domain.CampaignRepository     = (*Store)(nil)
 	_ domain.DoNotCallRepository    = (*Store)(nil)
 	_ domain.LexiconRepository      = (*Store)(nil)
+	_ domain.KnowledgeRepository    = (*Store)(nil)
 )
 
 // Pool defaults applied by Open unless the DSN sets them explicitly
@@ -80,6 +81,16 @@ func Open(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 	}
 	if _, ok := cfg.ConnConfig.RuntimeParams["application_name"]; !ok {
 		cfg.ConnConfig.RuntimeParams["application_name"] = "callgo-backend"
+	}
+	// pgvector: register the vector type on every new connection.
+	afterConnect := cfg.AfterConnect
+	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
+		if afterConnect != nil {
+			if err := afterConnect(ctx, conn); err != nil {
+				return err
+			}
+		}
+		return registerVectorType(ctx, conn)
 	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)

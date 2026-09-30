@@ -46,6 +46,10 @@ type profileBody struct {
 	MaxDurationSec int      `json:"maxDurationSec"`
 	Tools          []string `json:"tools"`
 	TransferNumber string   `json:"transferNumber"`
+	// KnowledgeBaseID must name a base of the org; KnowledgeMode is
+	// off (default) | tool | context.
+	KnowledgeBaseID string `json:"knowledgeBaseId"`
+	KnowledgeMode   string `json:"knowledgeMode"`
 }
 
 func (s *server) applyProfileBody(ctx context.Context, b profileBody, p *domain.AgentProfile) error {
@@ -95,11 +99,16 @@ func (s *server) applyProfileBody(ctx context.Context, b profileBody, p *domain.
 			return err
 		}
 	}
+	kbID, kbMode, err := s.validateProfileKnowledge(ctx, p.OrgID, b.KnowledgeBaseID, b.KnowledgeMode)
+	if err != nil {
+		return err
+	}
 	p.Name, p.SystemPrompt, p.Greeting, p.Language = name, strings.TrimSpace(b.SystemPrompt), strings.TrimSpace(b.Greeting), lang
 	p.LLMConfigID = llmID
 	p.STTProvider, p.STTModel = strings.TrimSpace(b.STTProvider), strings.TrimSpace(b.STTModel)
 	p.TTSProvider, p.TTSVoice = strings.TrimSpace(b.TTSProvider), strings.TrimSpace(b.TTSVoice)
 	p.MaxDurationSec, p.Tools, p.TransferNumber = maxDur, tools, transfer
+	p.KnowledgeBaseID, p.KnowledgeMode = kbID, kbMode
 	return nil
 }
 
@@ -112,6 +121,9 @@ func (s *server) listProfiles(w http.ResponseWriter, r *http.Request) {
 	for i := range items {
 		if items[i].Tools == nil {
 			items[i].Tools = []string{}
+		}
+		if items[i].KnowledgeMode == "" {
+			items[i].KnowledgeMode = domain.KnowledgeOff
 		}
 	}
 	writeJSON(w, http.StatusOK, newList(items, len(items)))
@@ -127,6 +139,9 @@ func (s *server) getProfile(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
+	}
+	if p.KnowledgeMode == "" {
+		p.KnowledgeMode = domain.KnowledgeOff
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"profile": p})
 }
