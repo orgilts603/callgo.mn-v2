@@ -107,6 +107,9 @@ type Config struct {
 	MockTelephony     bool
 	Simulator         bool
 	SimulatorInterval time.Duration
+	// KnowledgeFakeEmbeddings uses a deterministic offline embedder for
+	// knowledge bases whose LLM config has no embeddings API (dev only).
+	KnowledgeFakeEmbeddings bool
 
 	LiveKit  LiveKit
 	SIP      SIP
@@ -245,9 +248,10 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		LogLevel:  strings.ToLower(l.str("CALLGO_LOG_LEVEL", "info")),
 		LogPretty: l.boolean("CALLGO_LOG_PRETTY", !prod),
 
-		MockTelephony:     l.boolean("CALLGO_MOCK_TELEPHONY", true),
-		Simulator:         l.boolean("CALLGO_SIMULATOR", false),
-		SimulatorInterval: l.duration("CALLGO_SIMULATOR_INTERVAL", 4*time.Second),
+		MockTelephony:           l.boolean("CALLGO_MOCK_TELEPHONY", true),
+		Simulator:               l.boolean("CALLGO_SIMULATOR", false),
+		SimulatorInterval:       l.duration("CALLGO_SIMULATOR_INTERVAL", 4*time.Second),
+		KnowledgeFakeEmbeddings: l.boolean("CALLGO_EMBED_FAKE", false),
 
 		AgentWorkerURL:  strings.TrimRight(l.str("CALLGO_AGENT_WORKER_URL", "http://localhost:8090"), "/"),
 		ShutdownTimeout: l.duration("CALLGO_SHUTDOWN_TIMEOUT", 15*time.Second),

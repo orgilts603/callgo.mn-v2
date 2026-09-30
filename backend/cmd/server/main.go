@@ -26,6 +26,7 @@ import (
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/csvimport"
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/domain"
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/httpapi"
+	"github.com/orgilts603/callgo.mn-v2/backend/internal/knowledge"
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/lexicon"
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/live"
 	lk "github.com/orgilts603/callgo.mn-v2/backend/internal/livekit"
@@ -116,6 +117,14 @@ func run() error {
 	// ---- domain services ---------------------------------------------------
 	lex := lexicon.NewService(store, hub, log)
 
+	if cfg.KnowledgeFakeEmbeddings {
+		log.Warn().Msg("knowledge: FAKE embeddings enabled (CALLGO_EMBED_FAKE=true) — dev only")
+	}
+	kb := knowledge.NewService(store, store,
+		knowledge.DefaultEmbedderFactory(&http.Client{Timeout: 60 * time.Second}),
+		knowledge.Options{FakeEmbeddings: cfg.KnowledgeFakeEmbeddings}, log)
+	defer kb.Close()
+
 	engine = campaign.NewEngine(store, store, store, store, store, store, tel, hub, campaign.Options{
 		PollInterval:         cfg.Campaign.PollInterval,
 		RetryBackoff:         cfg.Campaign.RetryBackoff,
@@ -141,6 +150,9 @@ func run() error {
 		Lexicon:       store,
 		DNC:           store,
 		CampaignStats: store,
+		Knowledge:     kb,
+		KnowledgeRepo: store,
+		Chunks:        store,
 		Telephony:     tel,
 		Bus:           hub,
 		Live:          hub,

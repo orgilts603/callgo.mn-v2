@@ -72,6 +72,7 @@ deployment live in `docs/`:
 | `docs/ARCHITECTURE.md` | Asterisk → LiveKit SIP → LiveKit Agents → Go CRM → React; call flows; multi-LLM routing |
 | `docs/API.md` | Every REST / WebSocket / internal endpoint (frozen contract) |
 | `docs/EVENTS.md` | Live event envelope and payloads |
+| `docs/API.md` → "Campaign v2" and "Knowledge base / RAG" | Excel campaigns with schedules/outcomes/dry-run/do-not-call; pgvector knowledge bases with `tool` / `context` modes |
 | `docs/DEPLOY.md`, `docs/ASTERISK.md`, `docs/SIP_FLOW.md` | Production deployment, carrier trunk setup, SIP sequence diagrams |
 
 ### Run locally (no SIP trunk needed)
@@ -89,16 +90,16 @@ cd agent && uv venv && uv pip install -e ".[dev]" && python -m callgo_agent.main
 ### Tests
 
 ```bash
-cd backend  && go test ./...                 # Go: ~350 tests incl. Postgres integration (CALLGO_TEST_DATABASE_URL)
-cd frontend && pnpm exec vitest run          # React: 77 tests
-cd agent    && .venv/bin/pytest              # Python: 540 tests
+cd backend  && go test ./...                 # Go: 18 packages incl. Postgres+pgvector integration (CALLGO_TEST_DATABASE_URL)
+cd frontend && pnpm exec vitest run          # React: 132 tests
+cd agent    && .venv/bin/pytest              # Python: 600 tests
 ```
 
 ### Layout
 
 ```
-backend/   Go 1.26 control plane  (internal/{crm,httpapi,auth,livekit,campaign,live,lexicon,csvimport,phone,audio,config,middleware,llmtest})
-agent/     Python LiveKit Agents worker (session, tools, llm_router, stt_local=faster-whisper, tts_local=piper, normalizer)
+backend/   Go 1.26 control plane  (internal/{crm,httpapi,auth,livekit,campaign,live,lexicon,knowledge,embed,csvimport,xlsxexport,phone,audio,config,middleware,llmtest})
+agent/     Python LiveKit Agents worker (session, tools, knowledge (RAG), llm_router, stt_local=faster-whisper, tts_local=piper, normalizer)
 frontend/  React 19 + Vite + Tailwind v4 dashboard (live desk, call drawer, campaigns, contacts, lexicon, settings)
 infra/     docker-compose, livekit-server, livekit-sip, redis, Asterisk PJSIP configs, lk CLI scripts
 docs/      contracts and runbooks
