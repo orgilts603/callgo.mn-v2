@@ -42,11 +42,12 @@ test.describe('CallGo.mn dashboard smoke', () => {
     const rows = page.getByTestId('live-row')
     await expect(rows.first()).toBeVisible({ timeout: 20_000 })
 
+    // Rows re-sort as the simulator adds calls, so dispatch the click on the
+    // row instead of hit-testing a moving target, then read the selection from the URL.
     const callId = await rows.first().getAttribute('data-call-id')
     expect(callId).toBeTruthy()
-    await rows.first().click()
-
-    await expect(page).toHaveURL(new RegExp(`call=${callId}`))
+    await rows.first().dispatchEvent('click')
+    await expect(page).toHaveURL(/[?&]call=[0-9a-f-]{36}/)
     const drawer = page.getByRole('dialog')
     await expect(drawer).toBeVisible()
     // The drawer header shows "from → to" of the selected call.

@@ -25,6 +25,7 @@ from livekit.agents import (
 )
 from livekit.agents.metrics import LLMMetrics, STTMetrics
 
+from callgo_agent import routing
 from callgo_agent import session as sess
 from callgo_agent.events import EventEmitter
 from callgo_agent.schemas import (
@@ -36,7 +37,9 @@ from callgo_agent.schemas import (
     CampaignInfo,
     CampaignOutcome,
     Contact,
+    EntitlementInfo,
     Event,
+    HandoffInfo,
     JobMetadata,
     KnowledgeHit,
     KnowledgeInfo,
@@ -44,7 +47,9 @@ from callgo_agent.schemas import (
     LexiconScope,
     LLMConfig,
     LLMProvider,
+    MenuOption,
     Organization,
+    ResolvedRoute,
     Sentiment,
     Speaker,
     TranscriptTurn,
@@ -493,8 +498,14 @@ async def test_stt_and_tts_nodes_apply_normalizer(
 
 
 class FakeSpeechHandle:
+    def __init__(self) -> None:
+        self.interrupted = False
+
     async def wait_for_playout(self) -> None:
         await asyncio.sleep(0)
+
+    def interrupt(self, *, force: bool = False) -> None:
+        self.interrupted = True
 
 
 class FakeAgentSession:
@@ -511,11 +522,31 @@ class FakeAgentSession:
         self.started = False
         self.agent: Any = None
         self.room_options: Any = None
+        self.agents: list[Any] = []
+        self.interrupts: list[bool] = []
+        self.closed = False
         FakeAgentSession.instances.append(self)
 
     def on(self, name: str, cb: Callable[[Any], None]) -> Callable[[Any], None]:
         self.handlers[name].append(cb)
         return cb
+
+    def off(self, name: str, cb: Callable[[Any], None]) -> None:
+        if cb in self.handlers[name]:
+            self.handlers[name].remove(cb)
+
+    def update_agent(self, agent: Any) -> None:
+        self.agent = agent
+        self.agents.append(agent)
+
+    def interrupt(self, *, force: bool = False) -> asyncio.Future[None]:
+        self.interrupts.append(force)
+        fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        fut.set_result(None)
+        return fut
+
+    async def aclose(self) -> None:
+        self.closed = True
 
     def emit(self, name: str, ev: Any) -> None:
         for cb in list(self.handlers[name]):
@@ -523,6 +554,7 @@ class FakeAgentSession:
 
     async def start(self, agent: Any, *, room: Any, room_options: Any) -> None:
         self.agent, self.room_options, self.started = agent, room_options, True
+        self.agents.append(agent)
 
     def say(self, text: str, **kw: Any) -> FakeSpeechHandle:
         self.said.append((text, kw))
@@ -1150,6 +1182,7 @@ class FakeRoom:
     def __init__(self, name: str = "call-1") -> None:
         self.name = name
         self.handlers: dict[str, list[Callable[..., None]]] = defaultdict(list)
+        self.remote_participants: dict[str, Any] = {}
 
     def on(self, name: str, cb: Callable[..., None]) -> Callable[..., None]:
         self.handlers[name].append(cb)
@@ -1221,15 +1254,25 @@ class FakeJobContext:
 
 
 class FakeClient(FakeSink):
-    def __init__(self, boot: Bootstrap | None = None, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        boot: Bootstrap | None = None,
+        error: Exception | None = None,
+        by_profile: dict[UUID, Bootstrap] | None = None,
+    ) -> None:
         super().__init__()
         self.boot, self.error = boot, error
+        self.by_profile = by_profile or {}
         self.bootstrap_kwargs: dict[str, Any] = {}
+        self.bootstrap_calls: list[dict[str, Any]] = []
 
     async def bootstrap(self, **kw: Any) -> Bootstrap:
         self.bootstrap_kwargs = kw
+        self.bootstrap_calls.append(kw)
         if self.error:
             raise self.error
+        if kw.get("profile_id") is not None:
+            return self.by_profile[kw["profile_id"]]
         assert self.boot is not None
         return self.boot
 
@@ -1237,15 +1280,33 @@ class FakeClient(FakeSink):
         self.closed = True
 
 
-def make_factories(model: FakeLLM | None = None, fail: bool = False) -> PipelineFactories:
+def make_factories(
+    model: FakeLLM | None = None,
+    fail: bool = False,
+    built: list[str] | None = None,
+    models: dict[str, Any] | None = None,
+) -> PipelineFactories:
+    log = built if built is not None else []
+
     def build_llm(cfg: LLMConfig, fallbacks: list[LLMConfig]) -> Any:
+        log.append(f"llm:{cfg.name}")
         if fail:
             raise RuntimeError("no api key")
+        if models and cfg.name in models:
+            return models[cfg.name]
         return model
 
+    def build_stt(p: AgentProfile) -> Any:
+        log.append(f"stt:{p.name}")
+        return "STT"
+
+    def build_tts(p: AgentProfile) -> Any:
+        log.append(f"tts:{p.name}")
+        return "TTS"
+
     return PipelineFactories(
-        build_stt=lambda p: "STT",  # type: ignore[arg-type,return-value]
-        build_tts=lambda p: "TTS",  # type: ignore[arg-type,return-value]
+        build_stt=build_stt,
+        build_tts=build_tts,
         build_llm=build_llm,
         describe_llm=lambda c: f"{c.provider.value}/{c.model}",
         turn_detection=lambda: "vad",
@@ -1465,6 +1526,347 @@ async def test_run_call_session_start_failure(monkeypatch: pytest.MonkeyPatch) -
     assert ctx.shutdown_reasons == ["session start failed"]
     assert ctx.room.handlers["participant_disconnected"] == []
     assert model.closed
+
+
+# ---- entitlements, inbound routing, handoff ----------------------------------------------
+
+
+async def _start_call(
+    monkeypatch: pytest.MonkeyPatch,
+    boot: Bootstrap,
+    *,
+    client: FakeClient | None = None,
+    factories: PipelineFactories | None = None,
+) -> tuple[FakeJobContext, FakeClient, asyncio.Task[None]]:
+    FakeAgentSession.instances.clear()
+    monkeypatch.setattr(sess, "AgentSession", FakeAgentSession)
+    ctx = FakeJobContext()
+    client = client or FakeClient(boot=boot)
+    task = asyncio.create_task(
+        run_call(ctx, client, factories=factories or make_factories(FakeLLM(['{"summary": "x"}'])))  # type: ignore[arg-type]
+    )
+    for _ in range(200):
+        await asyncio.sleep(0)
+        if FakeAgentSession.instances and FakeAgentSession.instances[0].started:
+            break
+    return ctx, client, task
+
+
+async def _settle(n: int = 20) -> None:
+    for _ in range(n):
+        await asyncio.sleep(0)
+
+
+def _no_llm_factories(built: list[str]) -> PipelineFactories:
+    f = make_factories(built=built)
+    f.build_llm = lambda c, fb: pytest.fail("no LLM for refused calls")  # type: ignore[assignment,return-value]
+    return f
+
+
+async def test_run_call_refuses_when_quota_exceeded(monkeypatch: pytest.MonkeyPatch) -> None:
+    boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(
+        update={"entitlements": EntitlementInfo(can_start=False, reason="minutes")}
+    )
+    built: list[str] = []
+    ctx, client, task = await _start_call(monkeypatch, boot, factories=_no_llm_factories(built))
+    await asyncio.wait_for(task, 2)
+
+    session = FakeAgentSession.instances[0]
+    assert set(session.kw) == {"tts", "userdata"}  # TTS only: no STT, no LLM
+    assert isinstance(session.agent, sess.SilentAgent)
+    assert session.room_options.audio_input is False
+    assert session.said == [
+        ("Уучлаарай, одоогоор үйлчилгээ авах боломжгүй байна.", {"allow_interruptions": False})
+    ]
+    assert session.closed
+    assert built == ["tts:Сараа"]
+    assert [e.type for e in client.events] == ["call.ended"]  # never "answered"
+    ended = client.events[0].payload
+    assert ended["endReason"] == "quota_exceeded"
+    assert ended["summary"] == sess.GATE_SUMMARIES["quota_exceeded"]
+    assert ended["usage"]["llmTokensIn"] == 0
+    assert ctx.api.room.deleted == ["call-1"]
+    assert ctx.shutdown_reasons == ["quota_exceeded"]
+
+
+async def test_run_call_after_hours_message_hangs_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    route = ResolvedRoute(mode="after_hours", message="Ажлын цаг 09:00-18:00. Баярлалаа.")
+    boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(update={"route": route})
+    built: list[str] = []
+    ctx, client, task = await _start_call(monkeypatch, boot, factories=_no_llm_factories(built))
+    await asyncio.wait_for(task, 2)
+    session = FakeAgentSession.instances[0]
+    assert session.said[0][0] == "Ажлын цаг 09:00-18:00. Баярлалаа."
+    ended = client.of("call.ended")[0].payload
+    assert ended["endReason"] == "after_hours"
+    assert ctx.shutdown_reasons == ["after_hours"]
+
+
+async def test_run_call_refusal_survives_tts_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    boot = make_bootstrap().model_copy(update={"entitlements": EntitlementInfo(can_start=False)})
+    f = _no_llm_factories([])
+    f.build_tts = lambda p: (_ for _ in ()).throw(RuntimeError("no voice"))  # type: ignore[assignment]
+    FakeAgentSession.instances.clear()
+    monkeypatch.setattr(sess, "AgentSession", FakeAgentSession)
+    ctx = FakeJobContext()
+    client = FakeClient(boot=boot)
+    await run_call(ctx, client, factories=f)  # type: ignore[arg-type]
+    assert FakeAgentSession.instances == []
+    assert client.of("call.ended")[0].payload["endReason"] == "quota_exceeded"
+    assert ctx.api.room.deleted == ["call-1"]
+
+
+async def test_run_call_after_hours_with_profile_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route = ResolvedRoute(mode="after_hours", agent_profile_id=UUID(int=3), message="x")
+    boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(update={"route": route})
+    ctx, client, task = await _start_call(monkeypatch, boot)
+    session = FakeAgentSession.instances[0]
+    assert type(session.agent) is CallGoAgent
+    assert session.kw["llm"] is not None
+    ctx.room.emit("participant_disconnected", ctx.participant)
+    await asyncio.wait_for(task, 2)
+    assert client.of("call.ended")[0].payload["endReason"] == "hangup_customer"
+
+
+SALES = UUID(int=41)
+SUPPORT = UUID(int=42)
+MENU_ROUTE = ResolvedRoute(
+    mode="menu",
+    menu_prompt="Борлуулалт 1, тусламж 2 дарна уу.",
+    menu=[
+        MenuOption(key="1", label="Борлуулалт", agent_profile_id=SALES),
+        MenuOption(key="2", label="Тусламж", agent_profile_id=SUPPORT),
+    ],
+    menu_timeout_sec=5,
+    menu_repeat=1,
+)
+
+
+def _profile_boot(profile_id: UUID, name: str, voice: str, llm_name: str) -> Bootstrap:
+    base = make_bootstrap(llm_cfg=make_llm_config(llm_name, model=f"m-{llm_name}"))
+    profile = base.profile.model_copy(
+        update={"id": profile_id, "name": name, "tts_voice": voice, "greeting": f"{name} байна."}
+    )
+    return base.model_copy(update={"profile": profile})
+
+
+async def test_run_call_menu_dtmf_switches_profile(monkeypatch: pytest.MonkeyPatch) -> None:
+    boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(update={"route": MENU_ROUTE})
+    sales = _profile_boot(SALES, "Борлуулагч", "mn-voice-2", "sales-llm")
+    client = FakeClient(boot=boot, by_profile={SALES: sales})
+    built: list[str] = []
+    default_model = FakeLLM(['{"summary": "x"}'])
+    sales_model = FakeLLM(['{"summary": "Борлуулалт."}'])
+    f = make_factories(default_model, built=built, models={"sales-llm": sales_model})
+    ctx, client, task = await _start_call(monkeypatch, boot, client=client, factories=f)
+
+    session = FakeAgentSession.instances[0]
+    assert isinstance(session.agent, sess.SilentAgent)  # menu first, no LLM greeting
+    await _settle()
+    assert session.said[0][0] == MENU_ROUTE.menu_prompt
+    assert ctx.room.handlers["sip_dtmf_received"]
+
+    # a DTMF digit from someone else is ignored; the caller's "1" selects sales
+    other = types.SimpleNamespace(identity="op-1")
+    ctx.room.emit("sip_dtmf_received", rtc.SipDTMF(code=1, digit="2", participant=other))  # type: ignore[arg-type]
+    ctx.room.emit("sip_dtmf_received", rtc.SipDTMF(code=1, digit="1", participant=ctx.participant))  # type: ignore[arg-type]
+    await _settle(50)
+
+    assert client.bootstrap_calls[-1]["profile_id"] == SALES
+    assert client.bootstrap_calls[-1]["call_id"] == CALL
+    agent = session.agent
+    assert type(agent) is CallGoAgent and agent.bootstrap is sales
+    assert agent.llm is sales_model  # the chosen profile's LLM
+    assert agent.tts == "TTS"  # its own voice -> a new TTS engine
+    assert built == ["llm:primary", "stt:Сараа", "tts:Сараа", "llm:sales-llm", "tts:Борлуулагч"]
+    assert ctx.room.handlers["sip_dtmf_received"] == []  # detached after the menu
+
+    ctx.room.emit("participant_disconnected", ctx.participant)
+    await asyncio.wait_for(task, 2)
+    ended = client.of("call.ended")[0].payload
+    assert ended["llmModelUsed"] == "google/m-sales-llm"
+    assert ended["usage"]["llmModel"] == "google/m-sales-llm"
+    assert default_model.closed and sales_model.closed
+
+
+async def test_run_call_menu_spoken_choice(monkeypatch: pytest.MonkeyPatch) -> None:
+    boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(update={"route": MENU_ROUTE})
+    support = _profile_boot(SUPPORT, "Туслах", "", "primary")
+    client = FakeClient(boot=boot, by_profile={SUPPORT: support})
+    ctx, client, task = await _start_call(monkeypatch, boot, client=client)
+    session = FakeAgentSession.instances[0]
+    await _settle()
+    session.emit(
+        "user_input_transcribed", UserInputTranscribedEvent(transcript="хоёрыг", is_final=True)
+    )
+    await _settle(50)
+    agent = session.agent
+    assert type(agent) is CallGoAgent and agent.bootstrap is support
+    assert not isinstance(agent.llm, FakeLLM)  # same LLM config -> session LLM is kept
+    ctx.room.emit("participant_disconnected", ctx.participant)
+    await asyncio.wait_for(task, 2)
+
+
+async def test_run_call_menu_timeout_falls_back_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(routing, "MENU_TIMEOUT_MIN_SEC", 0.01)
+    route = MENU_ROUTE.model_copy(update={"menu_timeout_sec": 0, "menu_repeat": 1})
+    boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(update={"route": route})
+    ctx, client, task = await _start_call(monkeypatch, boot)
+    session = FakeAgentSession.instances[0]
+    for _ in range(100):
+        await asyncio.sleep(0.01)
+        if type(session.agent) is CallGoAgent:
+            break
+    assert [t for t, _ in session.said] == [route.menu_prompt, route.menu_prompt]
+    assert type(session.agent) is CallGoAgent and session.agent.bootstrap is boot
+    assert len(client.bootstrap_calls) == 1  # no re-bootstrap
+    ctx.room.emit("participant_disconnected", ctx.participant)
+    await asyncio.wait_for(task, 2)
+
+
+async def test_run_call_menu_rebootstrap_failure_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(update={"route": MENU_ROUTE})
+    client = FakeClient(boot=boot, by_profile={})  # KeyError for any profile id
+    ctx, client, task = await _start_call(monkeypatch, boot, client=client)
+    session = FakeAgentSession.instances[0]
+    await _settle()
+    ctx.room.emit("sip_dtmf_received", rtc.SipDTMF(code=2, digit="2", participant=ctx.participant))  # type: ignore[arg-type]
+    await _settle(50)
+    assert type(session.agent) is CallGoAgent and session.agent.bootstrap is boot
+    ctx.room.emit("participant_disconnected", ctx.participant)
+    await asyncio.wait_for(task, 2)
+
+
+class Operator:
+    def __init__(self, identity: str = "op-7", role: str = "operator") -> None:
+        self.identity = identity
+        self.attributes = {"callgo.role": role, "callgo.userId": "user-7"}
+
+
+async def test_run_call_handoff_wiring(monkeypatch: pytest.MonkeyPatch) -> None:
+    transcribed: list[str] = []
+
+    class FakeTranscriber:
+        def __init__(self, engine: Any, vad: Any, on_final: Callable[..., None]) -> None:
+            self.on_final = on_final
+
+        async def __call__(self, participant: Any) -> None:
+            transcribed.append(participant.identity)
+            self.on_final("сайн байна уу", 0.9, 1.0)
+            await asyncio.Event().wait()
+
+    monkeypatch.setattr(sess, "OperatorTranscriber", FakeTranscriber)
+    boot = make_bootstrap(llm_cfg=make_llm_config()).model_copy(
+        update={"handoff": HandoffInfo(enabled=True)}
+    )
+    ctx, client, task = await _start_call(monkeypatch, boot)
+    session = FakeAgentSession.instances[0]
+    agent = session.agent
+    assert "request_operator" in [t.info.name for t in agent.tools]
+    assert "# Human operator" in agent.instructions
+
+    state: CallState = session.kw["userdata"]
+    tool = next(t for t in agent.tools if t.info.name == "request_operator")
+    await tool(types.SimpleNamespace(session=session))
+    assert client.of("call.updated")[-1].payload == {"handoff": "requested"}
+
+    ctx.room.emit("participant_connected", Operator())
+    await _settle()
+    assert state.passive and transcribed == ["op-7"]
+    assert session.said[-1][0] == "Оператор холбогдлоо."
+    assert client.of("call.updated")[-1].payload == {"handoff": "active", "operatorId": "user-7"}
+    assert client.of("agent.state")[-1].payload["state"] == "handoff"
+    human = client.of("transcript.final")[-1].payload["turn"]
+    assert human["speaker"] == "human" and human["text"] == "сайн байна уу"
+    with pytest.raises(llm.StopResponse):
+        await agent.on_user_turn_completed(
+            llm.ChatContext.empty(), llm.ChatMessage(role="user", content=["Сайн уу"])
+        )
+    # the session's own state changes are not published while passive
+    session.emit(
+        "agent_state_changed", AgentStateChangedEvent(old_state="idle", new_state="listening")
+    )
+    assert client.of("agent.state")[-1].payload["state"] == "handoff"
+
+    ctx.room.emit("participant_disconnected", Operator())
+    await _settle()
+    assert not state.passive
+    assert session.said[-1][0] == "Би үргэлжлүүлье."
+    assert client.of("call.updated")[-1].payload == {"handoff": "ended", "operatorId": "user-7"}
+    await agent.on_user_turn_completed(
+        llm.ChatContext.empty(), llm.ChatMessage(role="user", content=["Сайн уу"])
+    )  # replies again
+
+    ctx.room.emit("participant_disconnected", ctx.participant)
+    await asyncio.wait_for(task, 2)
+    assert ctx.room.handlers["participant_connected"] == []
+
+
+async def test_run_call_without_handoff_ignores_operators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    boot = make_bootstrap(llm_cfg=make_llm_config())
+    ctx, client, task = await _start_call(monkeypatch, boot)
+    session = FakeAgentSession.instances[0]
+    assert "request_operator" not in [t.info.name for t in session.agent.tools]
+    assert ctx.room.handlers["participant_connected"] == []
+    ctx.room.emit("participant_disconnected", ctx.participant)
+    await asyncio.wait_for(task, 2)
+
+
+async def test_silent_agent_never_replies_or_greets(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakeAgentSession()
+    monkeypatch.setattr(CallGoAgent, "session", property(lambda self: fake))
+    agent = sess.SilentAgent(bootstrap=make_bootstrap())
+    await agent.on_enter()
+    assert fake.said == [] and fake.replies == []
+    assert agent.passive and agent.tools == []
+    with pytest.raises(llm.StopResponse):
+        await agent.on_user_turn_completed(
+            llm.ChatContext.empty(), llm.ChatMessage(role="user", content=["1"])
+        )
+
+
+async def test_passive_agent_keeps_customer_turn_in_context() -> None:
+    passive = [True]
+    agent = CallGoAgent(bootstrap=make_bootstrap(), is_passive=lambda: passive[0])
+    msg = llm.ChatMessage(role="user", content=["Оператортой ярьж байна"])
+    with pytest.raises(llm.StopResponse):
+        await agent.on_user_turn_completed(agent.chat_ctx.copy(), msg)
+    assert agent.chat_ctx.items[-1].id == msg.id
+    passive[0] = False
+    await agent.on_user_turn_completed(agent.chat_ctx.copy(), msg)  # no StopResponse
+
+
+def test_recorder_operator_turn_and_passive_away() -> None:
+    sink = FakeSink()
+    emitter = EventEmitter(sink, org_id=ORG, call_id=CALL, flush_interval_ms=60_000)
+    clock = Clock()
+    rec = CallRecorder(emitter, make_bootstrap(), clock=clock)
+    rec.mark_answered()
+    clock.t += 5
+    rec.add_operator_turn(" Сайн байна уу ", "сайн байна уу", 0.8, 1.5)
+    rec.add_operator_turn("  ")
+    turn = rec.turns[-1]
+    assert (turn.speaker, turn.text, turn.raw_text) == (
+        Speaker.HUMAN,
+        "Сайн байна уу",
+        "сайн байна уу",
+    )
+    assert (turn.start_ms, turn.end_ms) == (3500, 5000)
+    assert "Operator: Сайн байна уу" in rec.transcript_text()
+
+    fake = FakeAgentSession()
+    rec.attach(fake)  # type: ignore[arg-type]
+    rec.passive = lambda: True
+    fake.emit("user_state_changed", UserStateChangedEvent(old_state="listening", new_state="away"))
+    assert fake.replies == []
 
 
 def test_worker_server_registration() -> None:

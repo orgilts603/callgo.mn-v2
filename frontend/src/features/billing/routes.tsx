@@ -1,6 +1,6 @@
 import type { RouteObject } from 'react-router-dom'
 import { Navigate, useLocation } from 'react-router-dom'
-import { BILLING_PATH } from './QuotaBanner'
+import { BILLING_PATH } from './quota'
 
 /**
  * `/settings/billing` itself is rendered by SettingsPage (tab "Төлбөр" →

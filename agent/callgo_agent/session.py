@@ -470,6 +470,8 @@ class CallGoAgent(Agent):
         stt: NotGivenOr[stt.STT] = NOT_GIVEN,
         tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
     ) -> None:
+        # set before Agent.__init__, which inspects the class members (``passive``)
+        self._is_passive = is_passive or (lambda: False)
         # llm/stt/tts override the session's engines for this agent (menu -> other profile)
         super().__init__(
             instructions=instructions or build_instructions(bootstrap),
@@ -482,7 +484,6 @@ class CallGoAgent(Agent):
         self._stt_lexicon = lexicon_for(bootstrap.lexicon, LexiconScope.STT)
         self._tts_lexicon = lexicon_for(bootstrap.lexicon, LexiconScope.TTS)
         self._on_stt_final = on_stt_final
-        self._is_passive = is_passive or (lambda: False)
 
     @property
     def passive(self) -> bool:

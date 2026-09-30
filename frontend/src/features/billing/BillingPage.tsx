@@ -5,12 +5,12 @@ import { PlansGrid } from './PlansGrid'
 import { UsageMeters } from './UsageMeters'
 import { InvoicesTable } from './InvoicesTable'
 
-export const BILLING_VIEWS = [
+const BILLING_VIEWS = [
   { id: 'plans', label: 'Багц' },
   { id: 'usage', label: 'Хэрэглээ' },
   { id: 'invoices', label: 'Нэхэмжлэх' },
 ] as const
-export type BillingView = (typeof BILLING_VIEWS)[number]['id']
+type BillingView = (typeof BILLING_VIEWS)[number]['id']
 
 function isView(v: string | null): v is BillingView {
   return BILLING_VIEWS.some((x) => x.id === v)
