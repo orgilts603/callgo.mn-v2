@@ -3,8 +3,8 @@ import { toast } from 'sonner'
 import { Bot, Mic, Pencil, Plus, Timer, Trash2, Volume2, Wand2 } from 'lucide-react'
 import { Badge, Button, Card, CardBody, Drawer, EmptyState, Field, Input, Select, Skeleton, Textarea } from '@/components/ui'
 import { fmtDuration } from '@/lib/utils'
-import type { AgentProfile, LLMConfig } from '@/lib/types'
-import { useAgentProfiles, useDeleteAgentProfile, useLLMConfigs, useSaveAgentProfile, type AgentProfileBody } from './hooks'
+import type { AgentProfile, KnowledgeMode, LLMConfig } from '@/lib/types'
+import { useAgentProfiles, useDeleteAgentProfile, useKnowledgeBases, useLLMConfigs, useSaveAgentProfile, type AgentProfileBody } from './hooks'
 import { ConfirmDialog, ErrorNote, errMsg } from './common'
 
 export const DEFAULT_PROMPT_TEMPLATE = `Та бол {{company}} компанийн дуут туслах юм. Таны нэр "Туяа".
@@ -21,6 +21,12 @@ export const TOOL_OPTIONS: { id: string; label: string; description: string }[] 
   { id: 'transfer_call', label: 'transfer_call', description: 'Дуудлагыг оператор / бусад дугаар руу шилжүүлэх' },
   { id: 'lookup_contact', label: 'lookup_contact', description: 'Залгасан хүнийг харилцагчийн жагсаалтаас хайж мэдээлэл авах' },
   { id: 'schedule_callback', label: 'schedule_callback', description: 'Дараа буцаж залгахаар цаг товлох' },
+]
+
+export const KNOWLEDGE_MODES: { value: KnowledgeMode; label: string; hint: string }[] = [
+  { value: 'off', label: 'Унтраасан', hint: 'Агент мэдлэгийн санг ашиглахгүй' },
+  { value: 'tool', label: 'Хэрэгтэй үед хайна (lookup_knowledge)', hint: 'Агент асуулт бүрт сангаас хамгийн ойр хэсгийг хайна. Том сан, олон баримтад тохиромжтой.' },
+  { value: 'context', label: 'Бүхэлд нь prompt-д оруулна (жижиг баримтад)', hint: 'Сангийн бүх текстийг системийн prompt-д оруулна (60 000 тэмдэгт хүртэл). Жижиг зааварт тохиромжтой.' },
 ]
 
 const LANGUAGES = [{ value: 'mn', label: 'Монгол (mn)' }, { value: 'en', label: 'English (en)' }, { value: 'ru', label: 'Русский (ru)' }]
@@ -40,7 +46,7 @@ function emptyBody(): AgentProfileBody {
   return {
     name: '', systemPrompt: '', greeting: 'Сайн байна уу, танд юугаар туслах вэ?', language: 'mn', llmConfigId: null,
     sttProvider: 'faster_whisper', sttModel: 'large-v3', ttsProvider: 'piper', ttsVoice: '', maxDurationSec: 600,
-    tools: ['end_call'], transferNumber: '',
+    tools: ['end_call'], transferNumber: '', knowledgeBaseId: null, knowledgeMode: 'off',
   }
 }
 function fromProfile(p: AgentProfile): AgentProfileBody {
@@ -48,6 +54,7 @@ function fromProfile(p: AgentProfile): AgentProfileBody {
     name: p.name, systemPrompt: p.systemPrompt, greeting: p.greeting, language: p.language || 'mn', llmConfigId: p.llmConfigId ?? null,
     sttProvider: p.sttProvider, sttModel: p.sttModel, ttsProvider: p.ttsProvider, ttsVoice: p.ttsVoice, maxDurationSec: p.maxDurationSec,
     tools: p.tools ?? [], transferNumber: p.transferNumber ?? '',
+    knowledgeBaseId: p.knowledgeBaseId ?? null, knowledgeMode: p.knowledgeBaseId ? (p.knowledgeMode ?? 'off') : 'off',
   }
 }
 
@@ -62,9 +69,11 @@ export function AgentProfileEditor({ open, onClose, initial, llmConfigs }: { ope
 
 function ProfileForm({ initial, llmConfigs, onClose }: { initial?: AgentProfile | null; llmConfigs: LLMConfig[]; onClose: () => void }) {
   const save = useSaveAgentProfile()
+  const kbs = useKnowledgeBases()
   const [f, setF] = useState<AgentProfileBody>(() => (initial ? fromProfile(initial) : emptyBody()))
   const [touched, setTouched] = useState(false)
   const set = <K extends keyof AgentProfileBody>(k: K, v: AgentProfileBody[K]) => setF((s) => ({ ...s, [k]: v }))
+  const setKnowledgeBase = (id: string) => setF((s) => ({ ...s, knowledgeBaseId: id || null, knowledgeMode: id ? (s.knowledgeMode === 'off' ? 'tool' : s.knowledgeMode) : 'off' }))
   const toggleTool = (id: string) => setF((s) => ({ ...s, tools: s.tools.includes(id) ? s.tools.filter((t) => t !== id) : [...s.tools, id] }))
 
   const sttHint = STT_PROVIDERS.find((p) => p.value === f.sttProvider)?.hint
@@ -76,7 +85,10 @@ function ProfileForm({ initial, llmConfigs, onClose }: { initial?: AgentProfile 
     e.preventDefault()
     setTouched(true)
     if (!f.name.trim() || (f.tools.includes('transfer_call') && !f.transferNumber?.trim())) return
-    const body: AgentProfileBody = { ...f, name: f.name.trim(), transferNumber: f.transferNumber?.trim() || undefined }
+    const body: AgentProfileBody = {
+      ...f, name: f.name.trim(), transferNumber: f.transferNumber?.trim() || undefined,
+      knowledgeBaseId: f.knowledgeBaseId || null, knowledgeMode: f.knowledgeBaseId ? f.knowledgeMode : 'off',
+    }
     save.mutate({ id: initial?.id, body }, {
       onSuccess: () => { toast.success(initial ? 'Профайл шинэчлэгдлээ' : 'Профайл үүслээ'); onClose() },
       onError: (err) => toast.error(errMsg(err)),
@@ -137,6 +149,28 @@ function ProfileForm({ initial, llmConfigs, onClose }: { initial?: AgentProfile 
       <Field label="Шилжүүлэх дугаар" hint="transfer_call ашиглах үед дуудлага очих дугаар" error={transferError}>
         <Input value={f.transferNumber ?? ''} onChange={(e) => set('transferNumber', e.target.value)} placeholder="+97677001234" inputMode="tel" />
       </Field>
+
+      <div className="space-y-3">
+        <Field label="Мэдлэгийн сан" hint="Агент энэ сангийн баримтаас хариулт олж ярина">
+          <Select value={f.knowledgeBaseId ?? ''} onChange={(e) => setKnowledgeBase(e.target.value)} placeholder="Байхгүй"
+            options={(kbs.data ?? []).map((kb) => ({ value: kb.id, label: `${kb.name} · ${kb.documentCount} баримт` }))} />
+        </Field>
+        <div role="radiogroup" aria-label="Горим" className="grid gap-2">
+          {KNOWLEDGE_MODES.map((m) => {
+            const disabled = !f.knowledgeBaseId
+            return (
+              <label key={m.value} className={`flex items-start gap-3 rounded-md border border-[var(--border)] bg-[var(--surface-0)] px-3 py-2 ${disabled ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-[var(--surface-2)]'}`}>
+                <input type="radio" name="knowledge-mode" className="mt-0.5 h-4 w-4 accent-[var(--accent)]" value={m.value} disabled={disabled}
+                  checked={f.knowledgeMode === m.value} onChange={() => set('knowledgeMode', m.value)} />
+                <span>
+                  <span className="block text-xs text-[var(--fg)]">{m.label}</span>
+                  <span className="block text-xs text-[var(--fg-muted)]">{m.hint}</span>
+                </span>
+              </label>
+            )
+          })}
+        </div>
+      </div>
 
       <ErrorNote error={save.error} />
       <div className="sticky bottom-0 -mx-5 flex justify-end gap-2 border-t border-[var(--border)] bg-[var(--surface-1)] px-5 py-3">

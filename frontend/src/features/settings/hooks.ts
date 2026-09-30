@@ -1,6 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { AgentProfile, DoNotCallEntry, LLMCatalogEntry, LLMConfig, LLMProvider, Organization, SIPNumber, User } from '@/lib/types'
+import type {
+  AgentProfile, DoNotCallEntry, KnowledgeBase, KnowledgeChunkPreview, KnowledgeDocument, KnowledgeMode, KnowledgeSearchResponse,
+  LLMCatalogEntry, LLMConfig, LLMProvider, Organization, SIPNumber, User,
+} from '@/lib/types'
 
 const KEYS = {
   sip: ['settings', 'sip-numbers'] as const,
@@ -43,7 +46,7 @@ export function useProvisionSIPNumber() {
 export interface AgentProfileBody {
   name: string; systemPrompt: string; greeting: string; language: string; llmConfigId: string | null
   sttProvider: string; sttModel: string; ttsProvider: string; ttsVoice: string; maxDurationSec: number
-  tools: string[]; transferNumber?: string
+  tools: string[]; transferNumber?: string; knowledgeBaseId: string | null; knowledgeMode: KnowledgeMode
 }
 
 export function useAgentProfiles() {
@@ -133,5 +136,112 @@ export function useImportDNC() {
       return api.post<DNCImportResult>('/dnc/import', fd)
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: dncKey }),
+  })
+}
+
+// ---- Knowledge bases (RAG) ----
+export const knowledgeKey = ['settings', 'knowledge'] as const
+export const KNOWLEDGE_POLL_MS = 3000
+export interface KnowledgeBaseBody {
+  name: string; description?: string; embeddingLlmConfigId?: string | null; embeddingModel?: string
+  chunkSize?: number; chunkOverlap?: number
+}
+export interface KnowledgeBaseDetailData { knowledgeBase: KnowledgeBase; documents: KnowledgeDocument[] }
+export interface DocumentChunksData { document: KnowledgeDocument; chunks: KnowledgeChunkPreview[] }
+export const CHUNK_PAGE_SIZE = 50
+
+export function useKnowledgeBases() {
+  return useQuery({
+    queryKey: [...knowledgeKey, 'bases'] as const,
+    queryFn: async () => (await api.get<{ items: KnowledgeBase[] }>('/knowledge-bases')).items ?? [],
+  })
+}
+export function useKnowledgeBase(id: string | undefined) {
+  return useQuery({
+    queryKey: [...knowledgeKey, 'base', id] as const, enabled: !!id,
+    queryFn: () => api.get<KnowledgeBaseDetailData>(`/knowledge-bases/${id}`),
+  })
+}
+export function useCreateKnowledgeBase() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: KnowledgeBaseBody) => api.post<{ knowledgeBase: KnowledgeBase }>('/knowledge-bases', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: knowledgeKey }),
+  })
+}
+export function useUpdateKnowledgeBase() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: KnowledgeBaseBody }) => api.put<{ knowledgeBase: KnowledgeBase }>(`/knowledge-bases/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: knowledgeKey }),
+  })
+}
+export function useDeleteKnowledgeBase() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/knowledge-bases/${id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: knowledgeKey })
+      qc.invalidateQueries({ queryKey: KEYS.profiles })
+    },
+  })
+}
+
+/**
+ * Documents of a base. `polling` forces the 3 s refetch on/off; when omitted the list polls
+ * automatically for as long as any document is still `processing`.
+ */
+export function useKnowledgeDocuments(kbId: string | undefined, opts: { polling?: boolean } = {}) {
+  return useQuery({
+    queryKey: [...knowledgeKey, 'documents', kbId] as const, enabled: !!kbId,
+    queryFn: async () => (await api.get<{ items: KnowledgeDocument[] }>(`/knowledge-bases/${kbId}/documents`)).items ?? [],
+    refetchInterval: (q) => {
+      const auto = q.state.data?.some((d) => d.status === 'processing') ?? false
+      return (opts.polling ?? auto) ? KNOWLEDGE_POLL_MS : false
+    },
+  })
+}
+export function useUploadDocument(kbId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (file: File) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      return api.post<{ document: KnowledgeDocument }>(`/knowledge-bases/${kbId}/documents`, fd)
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: knowledgeKey }),
+  })
+}
+export function useAddText(kbId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { filename: string; text: string }) => api.post<{ document: KnowledgeDocument }>(`/knowledge-bases/${kbId}/documents`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: knowledgeKey }),
+  })
+}
+export function useDeleteDocument() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (docId: string) => api.delete(`/knowledge-documents/${docId}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: knowledgeKey }),
+  })
+}
+export function useReprocessDocument() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (docId: string) => api.post(`/knowledge-documents/${docId}/reprocess`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: knowledgeKey }),
+  })
+}
+export function useKnowledgeSearch(kbId: string) {
+  return useMutation({
+    mutationFn: (body: { query: string; k: number }) => api.post<KnowledgeSearchResponse>(`/knowledge-bases/${kbId}/search`, body),
+  })
+}
+export function useDocumentChunks(docId: string | null, offset = 0) {
+  return useQuery({
+    queryKey: [...knowledgeKey, 'chunks', docId, offset] as const, enabled: !!docId,
+    queryFn: () => api.get<DocumentChunksData>(`/knowledge-documents/${docId}`, { offset }),
+    placeholderData: (prev) => prev,
   })
 }

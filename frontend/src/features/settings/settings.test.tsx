@@ -165,6 +165,61 @@ describe('AgentProfileEditor', () => {
   })
 })
 
+describe('AgentProfileEditor knowledge base', () => {
+  const kbs = [
+    { id: 'kb1', name: 'Гарын авлага', documentCount: 3 },
+    { id: 'kb2', name: 'FAQ', documentCount: 1 },
+  ]
+  beforeEach(() => {
+    mocked.get.mockImplementation(async (path: string) => (path === '/knowledge-bases' ? { items: kbs } : { items: [] }))
+    mocked.post.mockResolvedValue({ profile: {} })
+    mocked.put.mockResolvedValue({ profile: {} })
+  })
+
+  it('defaults to no base with the mode radios disabled and posts null/off', async () => {
+    wrap(<AgentProfileEditor open onClose={vi.fn()} llmConfigs={[]} />)
+    const select = screen.getByLabelText(/^Мэдлэгийн сан/) as HTMLSelectElement
+    expect(select.value).toBe('')
+    expect(within(select).getByRole('option', { name: 'Байхгүй' })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: /Хэрэгтэй үед хайна/ })).toBeDisabled()
+    fireEvent.change(screen.getByLabelText(/^Нэр/), { target: { value: 'A' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Хадгалах' }))
+    await waitFor(() => expect(mocked.post).toHaveBeenCalled())
+    expect(mocked.post).toHaveBeenCalledWith('/agent-profiles', expect.objectContaining({ knowledgeBaseId: null, knowledgeMode: 'off' }))
+  })
+
+  it('sends knowledgeBaseId and the chosen mode', async () => {
+    wrap(<AgentProfileEditor open onClose={vi.fn()} llmConfigs={[]} />)
+    await screen.findByRole('option', { name: /Гарын авлага/ })
+    fireEvent.change(screen.getByLabelText(/^Мэдлэгийн сан/), { target: { value: 'kb1' } })
+    // Picking a base switches the mode on (tool) by default.
+    expect(screen.getByRole('radio', { name: /Хэрэгтэй үед хайна \(lookup_knowledge\)/ })).toBeChecked()
+    fireEvent.click(screen.getByRole('radio', { name: /Бүхэлд нь prompt-д оруулна/ }))
+    expect(screen.getByRole('radio', { name: /Бүхэлд нь prompt-д оруулна/ })).toBeChecked()
+    fireEvent.change(screen.getByLabelText(/^Нэр/), { target: { value: 'A' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Хадгалах' }))
+    await waitFor(() => expect(mocked.post).toHaveBeenCalled())
+    expect(mocked.post).toHaveBeenCalledWith('/agent-profiles', expect.objectContaining({ knowledgeBaseId: 'kb1', knowledgeMode: 'context' }))
+  })
+
+  it('forces mode off when the base is cleared, and PUTs on edit', async () => {
+    const profile = {
+      id: 'p1', orgId: 'o', name: 'Sales', systemPrompt: '', greeting: '', language: 'mn', llmConfigId: null, sttProvider: 'faster_whisper', sttModel: 'large-v3',
+      ttsProvider: 'piper', ttsVoice: '', maxDurationSec: 600, tools: ['end_call'], knowledgeBaseId: 'kb2', knowledgeMode: 'tool', createdAt: '', updatedAt: '',
+    } as AgentProfile
+    wrap(<AgentProfileEditor open onClose={vi.fn()} initial={profile} llmConfigs={[]} />)
+    await screen.findByRole('option', { name: /FAQ/ })
+    expect((screen.getByLabelText(/^Мэдлэгийн сан/) as HTMLSelectElement).value).toBe('kb2')
+    expect(screen.getByRole('radio', { name: /Хэрэгтэй үед хайна/ })).toBeChecked()
+
+    fireEvent.change(screen.getByLabelText(/^Мэдлэгийн сан/), { target: { value: '' } })
+    expect(screen.getByRole('radio', { name: /Унтраасан/ })).toBeChecked()
+    fireEvent.click(screen.getByRole('button', { name: 'Хадгалах' }))
+    await waitFor(() => expect(mocked.put).toHaveBeenCalled())
+    expect(mocked.put).toHaveBeenCalledWith('/agent-profiles/p1', expect.objectContaining({ knowledgeBaseId: null, knowledgeMode: 'off' }))
+  })
+})
+
 describe('SettingsPage', () => {
   it('renders the tab from the URL and lists SIP numbers with provisioning state', async () => {
     mocked.get.mockImplementation(async (path: string) => {

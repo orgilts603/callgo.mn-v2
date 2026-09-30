@@ -1,5 +1,5 @@
 import { Navigate, NavLink, useParams } from 'react-router-dom'
-import { Ban, Bot, Building2, Cpu, Phone } from 'lucide-react'
+import { Ban, BookOpen, Bot, Building2, Cpu, Phone } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { PageHeader } from '@/components/ui'
 import { cn } from '@/lib/utils'
@@ -8,12 +8,14 @@ import AgentProfilesTab from './AgentProfilesTab'
 import LLMConfigsTab from './LLMConfigsTab'
 import OrganizationTab from './OrganizationTab'
 import DoNotCallTab from './DoNotCallTab'
+import KnowledgeTab from './KnowledgeTab'
 
 export const SETTINGS_TABS = [
   { id: 'sip-numbers', label: 'SIP дугаарууд', icon: Phone, Component: SIPNumbersTab },
   { id: 'agent-profiles', label: 'Агент профайл', icon: Bot, Component: AgentProfilesTab },
   { id: 'llm', label: 'LLM тохиргоо', icon: Cpu, Component: LLMConfigsTab },
   { id: 'organization', label: 'Байгууллага', icon: Building2, Component: OrganizationTab },
+  { id: 'knowledge', label: 'Мэдлэгийн сан', icon: BookOpen, Component: KnowledgeTab },
   { id: 'dnc', label: 'Хориглосон дугаар', icon: Ban, Component: DoNotCallTab },
 ] as const satisfies readonly { id: string; label: string; icon: ComponentType<{ className?: string }>; Component: ComponentType }[]
 
@@ -25,7 +27,7 @@ export default function SettingsPage() {
   const Active = active.Component
   return (
     <div>
-      <PageHeader title="Тохиргоо" description="SIP дугаар, агент профайл, LLM болон байгууллагын тохиргоо" />
+      <PageHeader title="Тохиргоо" description="SIP дугаар, агент профайл, LLM, мэдлэгийн сан болон байгууллагын тохиргоо" />
       <nav className="mb-6 flex gap-1 overflow-x-auto border-b border-[var(--border)]" aria-label="Тохиргооны табууд">
         {SETTINGS_TABS.map((t) => (
           <NavLink
