@@ -8,13 +8,13 @@ export function getToken(): string | null {
   try { return localStorage.getItem(TOKEN_KEY) } catch { return null }
 }
 export function setToken(token: string | null) {
-  try { token ? localStorage.setItem(TOKEN_KEY, token) : localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ }
+  try { if (token) localStorage.setItem(TOKEN_KEY, token); else localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ }
 }
 export function getRefreshToken(): string | null {
   try { return localStorage.getItem(REFRESH_KEY) } catch { return null }
 }
 export function setRefreshToken(token: string | null) {
-  try { token ? localStorage.setItem(REFRESH_KEY, token) : localStorage.removeItem(REFRESH_KEY) } catch { /* ignore */ }
+  try { if (token) localStorage.setItem(REFRESH_KEY, token); else localStorage.removeItem(REFRESH_KEY) } catch { /* ignore */ }
 }
 
 export class HttpError extends Error {

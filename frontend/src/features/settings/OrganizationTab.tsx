@@ -8,17 +8,7 @@ import type { Organization, Plan, Subscription, SubscriptionStatus } from '@/lib
 import { fmtDateTime } from '@/lib/utils'
 import { ErrorNote, errMsg } from './common'
 import { useOrg, useUpdateOrg } from './hooks'
-
-export const TIMEZONES: { value: string; label: string }[] = [
-  { value: 'Asia/Ulaanbaatar', label: 'Улаанбаатар (UTC+8)' },
-  { value: 'Asia/Hovd', label: 'Ховд (UTC+7)' },
-  { value: 'Asia/Choibalsan', label: 'Чойбалсан (UTC+8)' },
-  { value: 'Asia/Shanghai', label: 'Бээжин (UTC+8)' },
-  { value: 'Asia/Seoul', label: 'Сөүл (UTC+9)' },
-  { value: 'Asia/Tokyo', label: 'Токио (UTC+9)' },
-  { value: 'Europe/Moscow', label: 'Москва (UTC+3)' },
-  { value: 'UTC', label: 'UTC' },
-]
+import { TIMEZONES } from './identity'
 
 const subTone: Record<SubscriptionStatus, BadgeTone> = { trialing: 'info', active: 'success', past_due: 'warning', canceled: 'neutral' }
 const subLabel: Record<SubscriptionStatus, string> = { trialing: 'Туршилт', active: 'Идэвхтэй', past_due: 'Төлбөр хоцорсон', canceled: 'Цуцлагдсан' }

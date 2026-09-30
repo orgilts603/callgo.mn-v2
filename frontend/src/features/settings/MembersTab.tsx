@@ -11,30 +11,11 @@ import { HttpError } from '@/lib/api'
 import type { Invitation, Role, User, UserStatus } from '@/lib/types'
 import { fmtDateTime } from '@/lib/utils'
 import { ErrorNote, errMsg } from './common'
+import { isExpired, memberGuard, roleOptions } from './identity'
 import { useCancelInvitation, useInviteMember, useMembers, useRemoveMember, useResendInvitation, useUpdateMember } from './hooks'
 
 const statusTone: Record<UserStatus, BadgeTone> = { active: 'success', invited: 'warning', disabled: 'danger' }
 const statusLabel: Record<UserStatus, string> = { active: 'Идэвхтэй', invited: 'Урилгатай', disabled: 'Идэвхгүй' }
-
-export function roleOptions(myRole: Role | undefined): { value: Role; label: string }[] {
-  const roles: Role[] = myRole === 'owner' ? ['owner', 'admin', 'operator'] : ['admin', 'operator']
-  return roles.map((r) => ({ value: r, label: roleLabel(r) }))
-}
-
-export interface MemberGuard { canManage: boolean; reason?: string }
-
-/**
- * Mirrors the backend rules so the UI never offers an action that will be refused:
- * nobody edits themselves, the last active owner cannot be demoted/disabled/removed,
- * only owners touch other owners, operators manage nobody.
- */
-export function memberGuard(member: User, me: User | null, activeOwners: number): MemberGuard {
-  if (!me || (me.role !== 'owner' && me.role !== 'admin')) return { canManage: false, reason: 'Эрх хүрэхгүй' }
-  if (member.id === me.id) return { canManage: false, reason: 'Өөрийн эрхийг өөрчлөх боломжгүй' }
-  if (member.role === 'owner' && member.status === 'active' && activeOwners <= 1) return { canManage: false, reason: 'Сүүлийн эзэмшигч' }
-  if (member.role === 'owner' && me.role !== 'owner') return { canManage: false, reason: 'Эзэмшигчийг зөвхөн эзэмшигч өөрчилнө' }
-  return { canManage: true }
-}
 
 function inviteError(err: unknown): string {
   if (err instanceof HttpError) {
@@ -143,7 +124,7 @@ function MemberRow({ member, me, activeOwners, onRemove }: { member: User; me: U
 function InvitationRow({ inv, canManage }: { inv: Invitation; canManage: boolean }) {
   const resend = useResendInvitation()
   const cancel = useCancelInvitation()
-  const expired = new Date(inv.expiresAt).getTime() < Date.now()
+  const expired = isExpired(inv.expiresAt)
   return (
     <TR data-testid={`invitation-${inv.id}`}>
       <TD className="font-medium">{inv.email}</TD>

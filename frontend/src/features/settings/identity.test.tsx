@@ -14,9 +14,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { api, HttpError } from '@/lib/api'
 import { useAuth } from '@/app/auth'
 import { testOrg, testUser } from '@/app/testing'
-import MembersTab, { memberGuard } from './MembersTab'
+import MembersTab from './MembersTab'
 import ApiKeysTab from './ApiKeysTab'
-import AuditTab, { dayEndISO, dayStartISO } from './AuditTab'
+import AuditTab from './AuditTab'
+import { dayEndISO, dayStartISO, memberGuard } from './identity'
 import OrganizationTab from './OrganizationTab'
 
 // The CI box runs many suites in parallel: allow slower renders than the defaults.

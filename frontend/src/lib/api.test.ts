@@ -6,11 +6,15 @@ function json(status: number, body: unknown): Response {
 }
 const unauthorized = () => json(401, { error: { code: 'unauthorized', message: 'token expired' } })
 
+function authOf(init?: RequestInit): string | undefined {
+  return (init?.headers as Record<string, string> | undefined)?.Authorization
+}
+
 type Call = { url: string; auth?: string; body?: string }
 function calls(fetchMock: ReturnType<typeof vi.fn>): Call[] {
   return fetchMock.mock.calls.map(([url, init]) => ({
     url: String(url),
-    auth: (init?.headers as Record<string, string> | undefined)?.Authorization,
+    auth: authOf(init),
     body: init?.body as string | undefined,
   }))
 }
@@ -36,7 +40,7 @@ describe('api client refresh tokens', () => {
     setToken('old'); setRefreshToken('r1')
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === '/api/auth/refresh') return json(200, { token: 'new', refreshToken: 'r2' })
-      const auth = (init?.headers as Record<string, string>).Authorization
+      const auth = authOf(init)
       return auth === 'Bearer new' ? json(200, { items: [1] }) : unauthorized()
     })
 
@@ -56,7 +60,7 @@ describe('api client refresh tokens', () => {
     const gate = new Promise<void>((r) => { release = r })
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url === '/api/auth/refresh') { await gate; return json(200, { token: 'new', refreshToken: 'r2' }) }
-      const auth = (init?.headers as Record<string, string>).Authorization
+      const auth = authOf(init)
       return auth === 'Bearer new' ? json(200, { url }) : unauthorized()
     })
 
@@ -119,7 +123,7 @@ describe('api client refresh tokens', () => {
   it('retries without refreshing when another request already rotated the token', async () => {
     setToken('old'); setRefreshToken('r1')
     fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
-      const auth = (init?.headers as Record<string, string>).Authorization
+      const auth = authOf(init)
       if (auth === 'Bearer old') { setToken('rotated'); return unauthorized() }
       return json(200, { ok: true })
     })

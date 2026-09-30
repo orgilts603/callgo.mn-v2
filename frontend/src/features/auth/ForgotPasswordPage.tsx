@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom'
 import { ArrowLeft, MailCheck } from 'lucide-react'
 import { Button, Field, Input } from '@/components/ui'
 import { api } from '@/lib/api'
-import { AuthLayout, authErrorMessage, FormAlert, isValidEmail, linkCls, StatusBlock } from './AuthLayout'
+import { AuthLayout, FormAlert, StatusBlock } from './AuthLayout'
+import { authErrorMessage, isValidEmail, linkCls } from './lib'
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('')

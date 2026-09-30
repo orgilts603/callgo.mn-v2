@@ -3,7 +3,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { CheckCircle2, XCircle } from 'lucide-react'
 import { Button, Field } from '@/components/ui'
 import { api, HttpError } from '@/lib/api'
-import { AuthLayout, authErrorMessage, FormAlert, linkCls, PasswordInput, PasswordStrength, StatusBlock, validateNewPassword } from './AuthLayout'
+import { AuthLayout, FormAlert, PasswordInput, PasswordStrength, StatusBlock } from './AuthLayout'
+import { authErrorMessage, linkCls, validateNewPassword } from './lib'
 
 const INVALID_LINK = 'Сэргээх холбоос хүчингүй эсвэл хугацаа нь дууссан байна. Шинэ холбоос авна уу.'
 

@@ -4,7 +4,8 @@ import { ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '@/app/auth'
 import { Button, Field, Input } from '@/components/ui'
-import { AuthLayout, authErrorMessage, FormAlert, isValidEmail, linkCls, PasswordInput, PasswordStrength, validateNewPassword } from './AuthLayout'
+import { AuthLayout, FormAlert, PasswordInput, PasswordStrength } from './AuthLayout'
+import { authErrorMessage, isValidEmail, linkCls, validateNewPassword } from './lib'
 
 type FieldKey = 'orgName' | 'name' | 'email' | 'password' | 'terms'
 type Errors = Partial<Record<FieldKey, string>>

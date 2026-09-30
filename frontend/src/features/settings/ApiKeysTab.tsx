@@ -9,22 +9,8 @@ import { HttpError } from '@/lib/api'
 import type { APIKey } from '@/lib/types'
 import { cn, fmtDateTime } from '@/lib/utils'
 import { ErrorNote, errMsg } from './common'
+import { API_SCOPES, maskedKey, scopeLabel } from './identity'
 import { useAPIKeys, useCreateAPIKey, useRevokeAPIKey, type CreateAPIKeyResult } from './hooks'
-
-export const API_SCOPES: { value: string; label: string; hint: string }[] = [
-  { value: 'calls:read', label: 'Дуудлага унших', hint: 'Дуудлагын түүх, транскрипт' },
-  { value: 'calls:write', label: 'Дуудлага хийх', hint: 'Залгах, таслах, шилжүүлэх' },
-  { value: 'campaigns:write', label: 'Кампанит ажил', hint: 'Үүсгэх, эхлүүлэх, зогсоох' },
-  { value: 'contacts:write', label: 'Харилцагч', hint: 'Нэмэх, засах, импортлох' },
-  { value: 'knowledge:write', label: 'Мэдлэгийн сан', hint: 'Баримт нэмэх, устгах' },
-  { value: '*', label: 'Бүрэн эрх', hint: 'Бүх API (админ түвшин)' },
-]
-const scopeLabel = (s: string) => API_SCOPES.find((x) => x.value === s)?.label ?? s
-
-/** Visible part of a key: "cg_live_<prefix>…". */
-export function maskedKey(prefix: string): string {
-  return `${prefix.startsWith('cg_') ? prefix : `cg_live_${prefix}`}…`
-}
 
 async function copyText(text: string): Promise<boolean> {
   try {

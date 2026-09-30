@@ -4,17 +4,8 @@ import { Button, Card, CardHeader, EmptyState, Input, Select, Skeleton, Table, T
 import { HttpError } from '@/lib/api'
 import { cn, fmtDateTime } from '@/lib/utils'
 import { ErrorNote } from './common'
+import { AUDIT_PAGE_SIZE, dayEndISO, dayStartISO } from './identity'
 import { useAuditLog, useMembers, type AuditFilters } from './hooks'
-
-export const AUDIT_PAGE_SIZE = 50
-
-/** `yyyy-mm-dd` (local day) → RFC-3339 instant at the start / end of that day. */
-export function dayStartISO(day: string): string | undefined {
-  return day ? new Date(`${day}T00:00:00`).toISOString() : undefined
-}
-export function dayEndISO(day: string): string | undefined {
-  return day ? new Date(`${day}T23:59:59.999`).toISOString() : undefined
-}
 
 function useDebounced<T>(value: T, ms: number): T {
   const [v, setV] = useState(value)

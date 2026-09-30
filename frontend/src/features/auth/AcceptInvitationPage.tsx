@@ -6,7 +6,8 @@ import { toast } from 'sonner'
 import { useAuth } from '@/app/auth'
 import { Button, Field, Input } from '@/components/ui'
 import { HttpError } from '@/lib/api'
-import { AuthLayout, authErrorMessage, FormAlert, linkCls, PasswordInput, PasswordStrength, StatusBlock, validateNewPassword } from './AuthLayout'
+import { AuthLayout, FormAlert, PasswordInput, PasswordStrength, StatusBlock } from './AuthLayout'
+import { authErrorMessage, linkCls, validateNewPassword } from './lib'
 
 const INVALID_LINK = 'Урилгын холбоос хүчингүй эсвэл хугацаа нь дууссан байна. Админаасаа дахин урилга илгээхийг хүснэ үү.'
 

@@ -4,10 +4,10 @@ import { toast } from 'sonner'
 import { resendVerification, useAuth } from '@/app/auth'
 import { Button } from '@/components/ui'
 import { cn } from '@/lib/utils'
-import { authErrorMessage } from './AuthLayout'
+import { authErrorMessage } from './lib'
 
 const DISMISS_KEY = 'callgo.verifyBanner.dismissed'
-export const RESEND_COOLDOWN_MS = 60_000
+const RESEND_COOLDOWN_MS = 60_000
 
 function readDismissed(userId: string): boolean {
   try { return sessionStorage.getItem(DISMISS_KEY) === userId } catch { return false }

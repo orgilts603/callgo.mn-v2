@@ -6,7 +6,8 @@ import { resendVerification, useAuth } from '@/app/auth'
 import { Button, Spinner } from '@/components/ui'
 import { api, HttpError } from '@/lib/api'
 import type { User } from '@/lib/types'
-import { AuthLayout, authErrorMessage, StatusBlock } from './AuthLayout'
+import { AuthLayout, StatusBlock } from './AuthLayout'
+import { authErrorMessage } from './lib'
 
 type State = { kind: 'verifying' } | { kind: 'success' } | { kind: 'failed'; message: string } | { kind: 'missing' }
 
