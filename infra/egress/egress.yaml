@@ -1,0 +1,56 @@
+# =============================================================================
+# CallGo.mn — LiveKit Egress (call recording) configuration
+# Дуудлага бичлэг хийх (egress) үйлчилгээний тохиргоо
+#
+# Enabled only with the compose profile "recording":
+#   docker compose --profile full --profile recording up -d
+#
+# api_key / api_secret / ws_url come from LIVEKIT_API_KEY, LIVEKIT_API_SECRET,
+# LIVEKIT_WS_URL (set by docker compose from .env).
+#
+# How a recording reaches the CRM (Бичлэг CRM-д хэрхэн хүрэх вэ):
+#   1. An audio-only RoomComposite egress is started for the call room —
+#      either automatically through the SIP dispatch rule's room_config.egress
+#      (infra/scripts/lk-setup.sh with CALLGO_RECORDING=true) or by the backend
+#      (StartRoomCompositeEgress{audio_only:true}) on room_started.
+#   2. Egress writes /out/recordings/<room>-<time>.ogg (local mode) or uploads
+#      to S3 when `storage.s3` below is configured.
+#   3. When the room ends, livekit-server sends the `egress_ended` webhook to
+#      POST /api/livekit/webhook. EgressInfo.file_results[0].location is the
+#      S3 URL, or the local path /out/recordings/<file>.ogg.
+#   4. The backend stores it in Call.recordingUrl (a local path is exposed by
+#      the frontend nginx as /recordings/<file>.ogg — strip the "/out" prefix)
+#      and GET /api/calls/{id}/recording redirects to it.
+# =============================================================================
+
+redis:
+  address: redis:6379
+
+# HTTP health check port (compose healthcheck) and metrics.
+health_port: 8082
+prometheus_port: 6792
+
+logging:
+  level: info
+
+# Internal ws:// connection to livekit-server on the private Docker network.
+insecure: true
+
+# Hard cap per recording so a stuck call cannot fill the disk.
+session_limits:
+  file_output_max_duration: 2h
+
+# ---------------------------------------------------------------------------
+# Storage. Without a provider, files are written inside the container at the
+# path given in the request (/out/... is the shared `recordings` volume).
+# For production prefer S3-compatible storage (AWS S3, MinIO, Cloudflare R2):
+# uncomment and fill in; credentials may also come from the AWS_* env vars.
+# ---------------------------------------------------------------------------
+# storage:
+#   s3:
+#     access_key: ""
+#     secret: ""
+#     region: ap-northeast-2
+#     endpoint: https://s3.example.mn   # MinIO / R2 / other S3-compatible
+#     bucket: callgo-recordings
+#     force_path_style: true

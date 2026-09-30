@@ -1,0 +1,12 @@
+{
+  "trunk": {
+    "name": "callgo-in-${LK_NUMBER}",
+    "metadata": "{\"source\":\"lk-setup\",\"number\":\"${LK_NUMBER}\",\"sipNumberId\":\"${LK_SIP_NUMBER_ID}\"}",
+    "numbers": ["${LK_NUMBER}"],
+    "allowed_addresses": ["${LK_ALLOWED_ADDRESSES}"],
+    "headers_to_attributes": {
+      "X-CallGo-DID": "callgo.did"
+    },
+    "krisp_enabled": false
+  }
+}

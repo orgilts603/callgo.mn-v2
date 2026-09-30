@@ -1,0 +1,21 @@
+# =============================================================================
+# CallGo.mn — example Caddy config for TLS on the VPS (installed on the host:
+# `apt install caddy`, then copy this to /etc/caddy/Caddyfile and set the
+# domains). Caddy obtains Let's Encrypt certificates automatically and proxies
+# WebSockets (/api/ws) without extra settings.
+# TLS гэрчилгээг Caddy автоматаар авна.
+#
+# Requires FRONTEND_PUBLISH=127.0.0.1:8088 in .env so only Caddy is public.
+# =============================================================================
+
+crm.example.mn {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8088
+}
+
+# Optional: LiveKit signalling over TLS, only needed if browsers / remote
+# agent workers connect to LiveKit directly (wss://rtc.example.mn).
+# Keep LIVEKIT_HTTP_PUBLISH=127.0.0.1:7880; media still uses UDP 50000-50100.
+# rtc.example.mn {
+# 	reverse_proxy 127.0.0.1:7880
+# }

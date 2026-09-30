@@ -1,0 +1,26 @@
+# =============================================================================
+# CallGo.mn — optional GPU override for the agent worker (faster-whisper on
+# CUDA). GPU-тэй серверт агентыг CUDA дээр ажиллуулах нэмэлт файл.
+#
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.gpu.yml \
+#     --env-file .env --profile full up -d
+#   (or: CALLGO_GPU=true infra/scripts/full-up.sh)
+#
+# Requires the NVIDIA driver + nvidia-container-toolkit on the host, and an
+# agent image whose Python env has the CUDA 12 runtime libraries ctranslate2
+# needs (cuBLAS + cuDNN 9, e.g. pip nvidia-cublas-cu12 nvidia-cudnn-cu12).
+# =============================================================================
+services:
+  agent:
+    environment:
+      CALLGO_WHISPER_DEVICE: cuda
+      CALLGO_WHISPER_COMPUTE_TYPE: float16
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

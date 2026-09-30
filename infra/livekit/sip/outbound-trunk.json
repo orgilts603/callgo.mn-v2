@@ -1,0 +1,11 @@
+{
+  "trunk": {
+    "name": "callgo-out-${LK_NUMBER}",
+    "metadata": "{\"source\":\"lk-setup\",\"number\":\"${LK_NUMBER}\",\"sipNumberId\":\"${LK_SIP_NUMBER_ID}\"}",
+    "address": "${SIP_ASTERISK_HOST}:${SIP_ASTERISK_PORT}",
+    "transport": "${LK_TRANSPORT}",
+    "numbers": ["${LK_NUMBER}"],
+    "auth_username": "${SIP_AUTH_USERNAME}",
+    "auth_password": "${SIP_AUTH_PASSWORD}"
+  }
+}

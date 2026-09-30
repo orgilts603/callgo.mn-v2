@@ -1,0 +1,11 @@
+DROP TABLE IF EXISTS lexicon_corrections;
+DROP TABLE IF EXISTS campaign_targets;
+DROP TABLE IF EXISTS call_transcripts;
+DROP TABLE IF EXISTS calls;
+DROP TABLE IF EXISTS campaigns;
+DROP TABLE IF EXISTS contacts;
+DROP TABLE IF EXISTS sip_numbers;
+DROP TABLE IF EXISTS agent_profiles;
+DROP TABLE IF EXISTS llm_configs;
+DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS organizations;

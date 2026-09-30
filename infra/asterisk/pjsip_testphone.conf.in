@@ -1,0 +1,37 @@
+; =============================================================================
+; CallGo.mn — optional test softphone (rendered to pjsip_testphone.conf only
+; when TEST_PHONE_PASSWORD is set in .env). Туршилтын softphone.
+;
+; Register any SIP softphone (Zoiper, Linphone, MicroSIP) with
+;   user: testphone   password: TEST_PHONE_PASSWORD   server: <SIP_EXTERNAL_IP>:5060 (UDP)
+; Dialling any number from it simulates an INBOUND PSTN call to
+; CARRIER_DEFAULT_DID (context [from-testphone] in extensions.conf), which is
+; the quickest end-to-end test before the carrier trunk is live.
+; Remove TEST_PHONE_PASSWORD in production.
+; =============================================================================
+[testphone]
+type=auth
+auth_type=userpass
+username=testphone
+password=${TEST_PHONE_PASSWORD}
+
+[testphone]
+type=aor
+max_contacts=1
+remove_existing=yes
+qualify_frequency=60
+
+[testphone]
+type=endpoint
+transport=transport-udp
+context=from-testphone
+auth=testphone
+aors=testphone
+disallow=all
+allow=alaw,ulaw,g722
+direct_media=no
+rtp_symmetric=yes
+force_rport=yes
+rewrite_contact=yes
+dtmf_mode=rfc4733
+callerid=CallGo Test <+97699000000>
