@@ -10,7 +10,9 @@
 ; (Оператороос SBC хаяг, порт, нэвтрэх нэр, нууц үг, DID дугаар авна.)
 ; =============================================================================
 
-
+; Credentials for REGISTER and for answering the carrier's INVITE challenges.
+; (Removed automatically by render-config.sh when CARRIER_USERNAME is empty,
+; i.e. for IP-authenticated trunks.)
 [carrier-auth]
 type=auth
 auth_type=userpass
