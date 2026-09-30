@@ -102,3 +102,38 @@ All under `/internal/agent/*`, protected by header `X-Agent-Token: $CALLGO_AGENT
 ## Agent worker HTTP (Python, port 8090)
 - `GET /health` → `{ok: true, workerId, activeJobs}`.
 - `POST /test-llm` `{config: LLMConfig-with-apiKey, prompt}` → `{ok, reply, latencyMs, error?}`.
+
+## Campaign v2 additions (Excel in → AI calls → Excel out)
+
+### Campaign fields (in every Campaign JSON)
+- `schedule`: `{timezone: "Asia/Ulaanbaatar", weekdays: [1,2,3,4,5], startTime: "09:00", endTime: "18:00", pacePerMinute: 10}`. Empty object = dial anytime. Weekdays use 0=Sunday..6=Saturday.
+- `outcomes`: `[{code, label, description, terminal}]`. When non-empty the AI must choose one at the end of each call. Non-terminal outcomes (e.g. `callback`) re-queue the target while attempts remain.
+- `dryRunLimit` (int), `dryRunDialed` (int), `skipped` (int).
+- Default outcomes offered by the UI (editable): `agreed` Зөвшөөрсөн (terminal), `declined` Татгалзсан (terminal), `callback` Дахин залгах (non-terminal), `wrong_number` Буруу дугаар (terminal), `no_contact` Холбогдоогүй (terminal).
+
+### Target fields
+- `status` gains `skipped` (do-not-call at import or claim time; `lastError` says why).
+- `outcome` (code), `outcomeNote` (LLM one-liner).
+
+### Call fields
+- `outcome`, `outcomeNote` — filled from the agent's `call.ended` payload (`payload.outcome`, `payload.outcomeNote`).
+
+### Endpoints
+- `POST /api/campaigns` (multipart) accepts `file` as **.csv or .xlsx/.xls** (first sheet, first row = header; same column detection as CSV). New optional fields: `schedule` (JSON string), `outcomes` (JSON string), `dryRunLimit` (int). Targets on the org's do-not-call list are imported with status `skipped`, counted in `campaign.skipped` and returned in `targets.skipped`.
+- `POST /api/campaigns/preview` multipart `file` → `{columns: string[], rows: string[][] (first 10), mapping: {column: "phone"|"name"|"tags"|"var"}, total: N, format: "csv"|"xlsx"}`. Used by the UI for both CSV and Excel.
+- `PUT /api/campaigns/{id}` `{name?, script?, sipNumberId?, agentProfileId?, concurrency?, maxAttempts?, schedule?, outcomes?, dryRunLimit?}` → `{campaign}`. Allowed while draft/paused; while running only schedule/concurrency/outcomes may change.
+- `POST /api/campaigns/{id}/start` optional body `{dryRunLimit: N}` (overrides the stored value for this run; 0 = full run). When the dry-run limit is reached the engine sets status `paused` and publishes `campaign.progress`; a later `start` with `{dryRunLimit: 0}` continues with the remaining targets.
+- `GET /api/campaigns/{id}/export.xlsx` → `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`. Sheet "Targets": original imported columns (phone, name, every var) followed by `Төлөв`, `Үр дүн` (outcome label), `Тайлбар` (outcomeNote), `Оролдлого`, `Хугацаа (сек)`, `Хандлага` (sentiment), `Хураангуй` (summary), `Дуудлагын огноо`, `Бичлэг` (recordingUrl), `Дуудлагын ID`. Sheet "Summary": totals per status and per outcome. Header row bold + frozen; filters on.
+- `GET /api/campaigns/{id}/stats` → `{byStatus: {pending, calling, done, failed, skipped}, byOutcome: [{code, label, count}]}`.
+
+### Do-not-call list
+- `GET /api/dnc?q=&limit=&offset=` → `{items: DoNotCallEntry[], total}`.
+- `POST /api/dnc` `{phone, reason?}` → `{entry}` (201; idempotent → 200 with existing).
+- `DELETE /api/dnc/{phone}` (URL-encoded E.164) → 204.
+- `POST /api/dnc/import` multipart `file` (.csv/.xlsx, phone column detected) → `{imported, skipped, errors}`.
+- `POST /api/calls/{id}/dnc` `{reason?}` → adds the call's customer number; 201.
+- Manual `POST /api/calls/dial` refuses (409 `conflict`) a number on the list.
+
+### Agent bootstrap (internal) additions
+- `campaign` gains `outcomes: [{code, label, description, terminal}]` and `schedule` is NOT sent (engine-side only).
+- `call.ended` payload may carry `outcome` (one of the codes, or "") and `outcomeNote`.

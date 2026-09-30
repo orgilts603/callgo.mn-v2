@@ -271,11 +271,50 @@ type Campaign struct {
 	Status      CampaignStatus `json:"status"`
 	Concurrency int            `json:"concurrency"`
 	MaxAttempts int            `json:"maxAttempts"`
-	Total       int            `json:"total"`
-	Completed   int            `json:"completed"`
-	Failed      int            `json:"failed"`
-	CreatedAt   time.Time      `json:"createdAt"`
-	UpdatedAt   time.Time      `json:"updatedAt"`
+	// Schedule limits when the dialer may place calls. Zero value = anytime.
+	Schedule CampaignSchedule `json:"schedule"`
+	// Outcomes are the structured results the AI must choose from at the end
+	// of each call (e.g. agreed / declined / callback / wrong_number). Empty =
+	// free-form only.
+	Outcomes []CampaignOutcome `json:"outcomes"`
+	// DryRunLimit > 0 makes Start dial only that many targets and then pause
+	// the campaign automatically so an admin can listen before a full run.
+	DryRunLimit int `json:"dryRunLimit"`
+	// DryRunDialed counts targets dialed under the current dry-run.
+	DryRunDialed int       `json:"dryRunDialed"`
+	Total        int       `json:"total"`
+	Completed    int       `json:"completed"`
+	Failed       int       `json:"failed"`
+	Skipped      int       `json:"skipped"` // do-not-call / invalid at import
+	CreatedAt    time.Time `json:"createdAt"`
+	UpdatedAt    time.Time `json:"updatedAt"`
+}
+
+// CampaignSchedule is the calling window of a campaign. Times are "HH:MM" in
+// Timezone (IANA, default "Asia/Ulaanbaatar"); Weekdays uses time.Weekday
+// values (0 = Sunday). Empty Weekdays = every day. PacePerMinute caps how many
+// new dials the engine starts per minute (0 = unlimited within Concurrency).
+type CampaignSchedule struct {
+	Timezone      string         `json:"timezone"`
+	Weekdays      []time.Weekday `json:"weekdays"`
+	StartTime     string         `json:"startTime"` // "09:00"
+	EndTime       string         `json:"endTime"`   // "18:00"
+	PacePerMinute int            `json:"pacePerMinute"`
+}
+
+// IsZero reports whether no window is configured (dial anytime).
+func (s CampaignSchedule) IsZero() bool {
+	return s.StartTime == "" && s.EndTime == "" && len(s.Weekdays) == 0 && s.PacePerMinute == 0
+}
+
+// CampaignOutcome is one selectable result of a call.
+type CampaignOutcome struct {
+	Code        string `json:"code"`        // machine key, e.g. "agreed"
+	Label       string `json:"label"`       // shown in the UI / Excel, e.g. "Зөвшөөрсөн"
+	Description string `json:"description"` // guidance for the LLM on when to pick it
+	// Terminal outcomes finish the target; non-terminal ones (e.g. "callback")
+	// re-queue it for another attempt if attempts remain.
+	Terminal bool `json:"terminal"`
 }
 
 // CampaignTargetStatus is per-contact state inside a campaign.
@@ -286,6 +325,7 @@ const (
 	TargetCalling CampaignTargetStatus = "calling"
 	TargetDone    CampaignTargetStatus = "done"
 	TargetFailed  CampaignTargetStatus = "failed"
+	TargetSkipped CampaignTargetStatus = "skipped" // do-not-call list
 )
 
 // CampaignTarget is one phone number queued in a campaign.
@@ -299,9 +339,22 @@ type CampaignTarget struct {
 	Status     CampaignTargetStatus `json:"status"`
 	Attempts   int                  `json:"attempts"`
 	CallID     *uuid.UUID           `json:"callId,omitempty"`
-	LastError  string               `json:"lastError,omitempty"`
-	NextTryAt  *time.Time           `json:"nextTryAt,omitempty"`
-	UpdatedAt  time.Time            `json:"updatedAt"`
+	// Outcome is the CampaignOutcome.Code chosen by the AI on the last call.
+	Outcome     string     `json:"outcome,omitempty"`
+	OutcomeNote string     `json:"outcomeNote,omitempty"` // one-line justification from the LLM
+	LastError   string     `json:"lastError,omitempty"`
+	NextTryAt   *time.Time `json:"nextTryAt,omitempty"`
+	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+
+// DoNotCallEntry is a phone number the organisation must never dial.
+type DoNotCallEntry struct {
+	ID        uuid.UUID  `json:"id"`
+	OrgID     uuid.UUID  `json:"orgId"`
+	Phone     string     `json:"phone"` // E.164
+	Reason    string     `json:"reason"`
+	CreatedBy *uuid.UUID `json:"createdBy,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
 }
 
 // LexiconScope says where a correction applies.
@@ -486,6 +539,19 @@ type CampaignRepository interface {
 	ClaimTargets(ctx context.Context, campaignID uuid.UUID, n int) ([]CampaignTarget, error)
 	UpdateTarget(ctx context.Context, t *CampaignTarget) error
 	CountActiveTargets(ctx context.Context, campaignID uuid.UUID) (int, error)
+	DeleteCampaign(ctx context.Context, id uuid.UUID) error
+	// ListAllTargets streams every target of a campaign (for exports).
+	ListAllTargets(ctx context.Context, campaignID uuid.UUID) ([]CampaignTarget, error)
+}
+
+// DoNotCallRepository persists the per-org do-not-call list.
+type DoNotCallRepository interface {
+	AddDoNotCall(ctx context.Context, e *DoNotCallEntry) error // idempotent on (org, phone)
+	RemoveDoNotCall(ctx context.Context, orgID uuid.UUID, phone string) error
+	ListDoNotCall(ctx context.Context, orgID uuid.UUID, search string, limit, offset int) ([]DoNotCallEntry, int, error)
+	IsDoNotCall(ctx context.Context, orgID uuid.UUID, phone string) (bool, error)
+	// FilterDoNotCall returns the subset of phones that are on the list.
+	FilterDoNotCall(ctx context.Context, orgID uuid.UUID, phones []string) (map[string]bool, error)
 }
 
 // LexiconRepository persists corrections.

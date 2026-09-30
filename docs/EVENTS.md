@@ -19,3 +19,7 @@ Envelope (Go `domain.Event`):
 | `campaign.progress` | `{"campaign": Campaign, "target": CampaignTarget|null}` |
 | `lexicon.updated` | `{"correction": LexiconCorrection, "action": "created|updated|deleted"}` |
 | `system` | `{"hello": true, "activeCalls": Call[]}` on connect; `{"message": "..."}` otherwise |
+
+### Campaign v2
+- `call.ended` payload adds `"outcome": "agreed|declined|callback|…|"` and `"outcomeNote": "…"` when the call belongs to a campaign with outcomes.
+- `campaign.progress` is also published when a dry-run limit pauses the campaign (`campaign.status == "paused"`, `campaign.dryRunDialed == campaign.dryRunLimit`).

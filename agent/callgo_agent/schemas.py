@@ -162,6 +162,8 @@ class Call(CamelModel):
     sentiment: str = ""
     intent: str = ""
     end_reason: str = ""
+    outcome: str = ""
+    outcome_note: str = ""
     llm_model_used: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -187,11 +189,21 @@ class LexiconEntry(CamelModel):
     id: UUID | None = None
 
 
+class CampaignOutcome(CamelModel):
+    """One structured result the AI must choose from at the end of a campaign call."""
+
+    code: str
+    label: str
+    description: str = ""
+    terminal: bool = True
+
+
 class CampaignInfo(CamelModel):
     id: UUID
     name: str
     script: str = ""
     vars: dict[str, str] = Field(default_factory=dict)
+    outcomes: list[CampaignOutcome] = Field(default_factory=list)
 
 
 class Bootstrap(CamelModel):
@@ -245,6 +257,10 @@ class CallEndedPayload(CamelModel):
     intent: str = ""
     duration_sec: int = 0
     llm_model_used: str = ""
+    # Campaign v2: one of CampaignInfo.outcomes[].code, or "" when the campaign
+    # defines no outcomes / the call was not a campaign call.
+    outcome: str = ""
+    outcome_note: str = ""
 
 
 class JobMetadata(CamelModel):

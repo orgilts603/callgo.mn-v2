@@ -41,7 +41,7 @@ export interface Call {
   agentProfileId?: UUID | null; direction: CallDirection; status: CallStatus; fromNumber: string; toNumber: string
   roomName: string; sipCallId?: string; participantId?: string; startedAt: ISODate; answeredAt?: ISODate | null
   endedAt?: ISODate | null; durationSec: number; recordingUrl?: string; summary?: string; sentiment?: Sentiment
-  intent?: string; endReason?: string; llmModelUsed?: string; metadata?: Record<string, unknown>
+  intent?: string; endReason?: string; outcome?: string; outcomeNote?: string; llmModelUsed?: string; metadata?: Record<string, unknown>
   createdAt: ISODate; updatedAt: ISODate
 }
 
@@ -52,17 +52,35 @@ export interface TranscriptTurn {
 }
 
 export type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed'
+/** Calling window. Weekdays: 0=Sunday..6=Saturday. Empty = anytime. */
+export interface CampaignSchedule {
+  timezone: string; weekdays: number[]; startTime: string; endTime: string; pacePerMinute: number
+}
+export interface CampaignOutcome { code: string; label: string; description: string; terminal: boolean }
+export const DEFAULT_OUTCOMES: CampaignOutcome[] = [
+  { code: 'agreed', label: 'Зөвшөөрсөн', description: 'Харилцагч саналыг зөвшөөрсөн / үйлдэл хийхээр тохирсон', terminal: true },
+  { code: 'declined', label: 'Татгалзсан', description: 'Харилцагч тодорхой татгалзсан', terminal: true },
+  { code: 'callback', label: 'Дахин залгах', description: 'Харилцагч дараа залгахыг хүссэн эсвэл одоо ярих боломжгүй', terminal: false },
+  { code: 'wrong_number', label: 'Буруу дугаар', description: 'Хариулсан хүн зорилтот хүн биш', terminal: true },
+  { code: 'no_contact', label: 'Холбогдоогүй', description: 'Хариулаагүй, завгүй эсвэл дуут шуудан', terminal: true },
+]
 export interface Campaign {
   id: UUID; orgId: UUID; name: string; sipNumberId?: UUID | null; agentProfileId?: UUID | null; script: string
-  status: CampaignStatus; concurrency: number; maxAttempts: number; total: number; completed: number; failed: number
+  status: CampaignStatus; concurrency: number; maxAttempts: number; schedule: CampaignSchedule; outcomes: CampaignOutcome[]
+  dryRunLimit: number; dryRunDialed: number; total: number; completed: number; failed: number; skipped: number
   createdAt: ISODate; updatedAt: ISODate
 }
-export type CampaignTargetStatus = 'pending' | 'calling' | 'done' | 'failed'
+export type CampaignTargetStatus = 'pending' | 'calling' | 'done' | 'failed' | 'skipped'
 export interface CampaignTarget {
   id: UUID; campaignId: UUID; contactId?: UUID | null; phone: string; name: string; vars?: Record<string, string>
-  status: CampaignTargetStatus; attempts: number; callId?: UUID | null; lastError?: string; nextTryAt?: ISODate | null
-  updatedAt: ISODate
+  status: CampaignTargetStatus; attempts: number; callId?: UUID | null; outcome?: string; outcomeNote?: string
+  lastError?: string; nextTryAt?: ISODate | null; updatedAt: ISODate
 }
+export interface CampaignPreview {
+  columns: string[]; rows: string[][]; mapping: Record<string, 'phone' | 'name' | 'tags' | 'var'>; total: number; format: 'csv' | 'xlsx'
+}
+export interface CampaignStats { byStatus: Record<CampaignTargetStatus, number>; byOutcome: { code: string; label: string; count: number }[] }
+export interface DoNotCallEntry { id: UUID; orgId: UUID; phone: string; reason: string; createdBy?: UUID | null; createdAt: ISODate }
 
 export type LexiconScope = 'stt' | 'tts' | 'both'
 export interface LexiconCorrection {
@@ -82,7 +100,7 @@ export type EventType =
 export type AgentState = 'initializing' | 'listening' | 'thinking' | 'speaking' | 'idle'
 
 export interface LiveEvent<P = unknown> { id: string; type: EventType; orgId: UUID; callId?: UUID | null; at: ISODate; payload: P }
-export interface CallEventPayload { call: Call; endReason?: string; summary?: string; sentiment?: Sentiment; intent?: string }
+export interface CallEventPayload { call: Call; endReason?: string; summary?: string; sentiment?: Sentiment; intent?: string; outcome?: string; outcomeNote?: string }
 export interface TranscriptPartialPayload { speaker: Speaker; text: string; startMs: number }
 export interface TranscriptFinalPayload { turn: TranscriptTurn }
 export interface AgentStatePayload { state: AgentState; llmModel?: string }
