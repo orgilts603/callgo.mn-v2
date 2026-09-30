@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { configure, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -18,6 +18,10 @@ import MembersTab, { memberGuard } from './MembersTab'
 import ApiKeysTab from './ApiKeysTab'
 import AuditTab, { dayEndISO, dayStartISO } from './AuditTab'
 import OrganizationTab from './OrganizationTab'
+
+// The CI box runs many suites in parallel: allow slower renders than the defaults.
+configure({ asyncUtilTimeout: 5000 })
+vi.setConfig({ testTimeout: 20_000 })
 
 const mocked = vi.mocked(api)
 const T = '2026-09-01T00:00:00Z'

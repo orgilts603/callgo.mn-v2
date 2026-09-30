@@ -53,6 +53,7 @@ from livekit.agents import (
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
     llm,
     room_io,
     stt,
@@ -508,6 +509,11 @@ class CallGoAgent(Agent):
             log.debug("could not keep passive turn in the chat context: %s", exc)
         raise llm.StopResponse()
 
+    async def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        """The framework default cuts in with an LLM reply: never while passive."""
+        if not self.passive:
+            await super().on_user_turn_exceeded(ev)
+
     @property
     def is_outbound(self) -> bool:
         return self.bootstrap.call.direction == CallDirection.OUTBOUND
@@ -634,6 +640,8 @@ class CallRecorder:
         # While it returns True (operator handoff) session agent states are not published
         # and silent customers are not prompted.
         self.passive: Callable[[], bool] = lambda: False
+        # False while no LLM reply may be generated (IVR menu).
+        self.away_prompt_enabled: Callable[[], bool] = lambda: True
 
     # -- timing --
 
@@ -806,6 +814,7 @@ class CallRecorder:
             and not self._away_prompted
             and self._session is not None
             and not self.passive()
+            and self.away_prompt_enabled()
         ):
             self._away_prompted = True
             try:
@@ -1533,6 +1542,7 @@ async def run_call(
 
     async def continue_with(chosen: Bootstrap) -> None:
         """Switch from the menu to the conversational agent for ``chosen``'s profile."""
+        in_menu[0] = False
         engines: dict[str, Any] = {}
         if chosen is not boot:
             state.bootstrap = recorder.bootstrap = chosen
@@ -1594,6 +1604,8 @@ async def run_call(
             session.shutdown(drain=False)
 
     route = menu_route(boot)
+    in_menu = [route is not None]
+    recorder.away_prompt_enabled = lambda: not in_menu[0]
     agent: CallGoAgent = (
         SilentAgent(bootstrap=boot, on_stt_final=recorder.on_stt_final)
         if route is not None

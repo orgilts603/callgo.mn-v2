@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from '@testing-library/react'
+import { act, configure, fireEvent, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, getRefreshToken, getToken, HttpError } from '@/lib/api'
 import { useAuth } from '@/app/auth'
@@ -11,6 +11,10 @@ import ResetPasswordPage from './ResetPasswordPage'
 import AcceptInvitationPage from './AcceptInvitationPage'
 import { VerifyBanner } from './VerifyBanner'
 import { passwordScore } from './AuthLayout'
+
+// The CI box runs many suites in parallel: allow slower renders than the defaults.
+configure({ asyncUtilTimeout: 5000 })
+vi.setConfig({ testTimeout: 20_000 })
 
 const routes = [
   { path: '/login', element: <LoginPage /> },

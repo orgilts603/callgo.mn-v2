@@ -20,6 +20,7 @@ from livekit.agents import (
     ConversationItemAddedEvent,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
     llm,
     stt,
 )
@@ -507,6 +508,9 @@ class FakeSpeechHandle:
 
     def interrupt(self, *, force: bool = False) -> None:
         self.interrupted = True
+
+    def __await__(self) -> Any:
+        return self.wait_for_playout().__await__()
 
 
 class FakeAgentSession:
@@ -1717,6 +1721,11 @@ async def test_run_call_menu_spoken_choice(monkeypatch: pytest.MonkeyPatch) -> N
     ctx, client, task = await _start_call(monkeypatch, boot, client=client)
     session = FakeAgentSession.instances[0]
     await _settle()
+    # no LLM reply while the menu runs: the away prompt is suppressed
+    session.emit(
+        "user_state_changed", UserStateChangedEvent(old_state="listening", new_state="away")
+    )
+    assert session.replies == []
     session.emit(
         "user_input_transcribed", UserInputTranscribedEvent(transcript="хоёрыг", is_final=True)
     )
@@ -1851,6 +1860,26 @@ async def test_silent_agent_never_replies_or_greets(monkeypatch: pytest.MonkeyPa
         await agent.on_user_turn_completed(
             llm.ChatContext.empty(), llm.ChatMessage(role="user", content=["1"])
         )
+
+
+async def test_user_turn_exceeded_is_ignored_while_passive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeAgentSession()
+    monkeypatch.setattr(CallGoAgent, "session", property(lambda self: fake))
+    passive = [True]
+    agent = CallGoAgent(bootstrap=make_bootstrap(), is_passive=lambda: passive[0])
+    ev = UserTurnExceededEvent(
+        transcript="урт яриа",
+        accumulated_transcript="урт яриа",
+        accumulated_word_count=2,
+        duration=30.0,
+    )
+    await agent.on_user_turn_exceeded(ev)
+    assert fake.replies == []
+    passive[0] = False
+    await agent.on_user_turn_exceeded(ev)
+    assert fake.replies and fake.replies[0]["user_input"] == "урт яриа"
 
 
 async def test_passive_agent_keeps_customer_turn_in_context() -> None:
