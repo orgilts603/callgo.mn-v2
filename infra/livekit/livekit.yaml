@@ -72,10 +72,6 @@ room:
   empty_timeout: 300
   # Close a room 20 s after the last participant (caller or agent) left.
   departure_timeout: 20
-  # Phone calls are audio only; opus is what the agent and livekit-sip use.
-  enabled_codecs:
-    - mime: audio/opus
-    - mime: audio/red
 
 # Webhooks: room_started, participant_joined/left, room_finished and
 # egress_ended are POSTed to the CallGo backend, signed with api_key.
