@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	lkauth "github.com/livekit/protocol/auth"
@@ -25,6 +26,8 @@ const (
 	attrSIPCallStatus = "sip.callStatus"
 
 	callRoomPrefix = "call-"
+
+	webhookTimeout = 15 * time.Second
 )
 
 func (s *server) livekitWebhook(w http.ResponseWriter, r *http.Request) {
@@ -35,8 +38,11 @@ func (s *server) livekitWebhook(w http.ResponseWriter, r *http.Request) {
 		auth.WriteError(w, http.StatusUnauthorized, "unauthorized", "invalid webhook signature")
 		return
 	}
-	// LiveKit retries non-2xx responses; processing errors are logged, not returned.
-	if err := s.handleWebhook(r.Context(), ev); err != nil {
+	// Finish processing even if LiveKit drops the connection; errors are
+	// logged, not returned (LiveKit would only retry the same event).
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), webhookTimeout)
+	defer cancel()
+	if err := s.handleWebhook(ctx, ev); err != nil {
 		s.log.Error().Err(err).Str("event", ev.GetEvent()).Str("room", ev.GetRoom().GetName()).Msg("handle livekit webhook")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})

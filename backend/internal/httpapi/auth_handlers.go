@@ -65,7 +65,7 @@ func (s *server) respondAuth(w http.ResponseWriter, r *http.Request, u *domain.U
 func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	c := claimsOf(r)
 	u, err := s.d.Org.GetUser(r.Context(), c.UserID)
-	if errors.Is(err, domain.ErrNotFound) || (err == nil && u.OrgID != c.OrgID) {
+	if errors.Is(err, domain.ErrNotFound) || (err == nil && (u == nil || u.OrgID != c.OrgID)) {
 		auth.WriteError(w, http.StatusUnauthorized, "unauthorized", "user no longer exists")
 		return
 	}

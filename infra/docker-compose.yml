@@ -122,6 +122,10 @@ services:
     volumes:
       - ./livekit/livekit.yaml:/etc/livekit/livekit.yaml:ro
       - ./livekit/entrypoint.sh:/etc/livekit/entrypoint.sh:ro
+    # Lets `make dev` (backend running on the host) receive webhooks at
+    # LIVEKIT_WEBHOOK_URL=http://host.docker.internal:8080/api/livekit/webhook.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       # 7880/tcp: HTTP + WebSocket signalling and the server API (lk CLI).
       #           Keep it on loopback unless external WebRTC clients need it;

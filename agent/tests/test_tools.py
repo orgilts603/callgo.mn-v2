@@ -197,8 +197,14 @@ async def test_lookup_contact_includes_contact_and_campaign() -> None:
         bootstrap=make_bootstrap(tools=["lookup_contact"], contact=contact, campaign=campaign)
     )
     text = await build_tools(state, FakeControl())[0](FakeRunContext())
-    for expected in ("Name: Бат", "Phone: +97699112233", "Tags: vip", "order: A-17",
-                     "Campaign: Autumn", "discount: 20%"):
+    for expected in (
+        "Name: Бат",
+        "Phone: +97699112233",
+        "Tags: vip",
+        "order: A-17",
+        "Campaign: Autumn",
+        "discount: 20%",
+    ):
         assert expected in text
 
 

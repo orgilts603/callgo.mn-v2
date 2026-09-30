@@ -64,7 +64,9 @@ class EventEmitter:
         self._sink = sink
         self.org_id = org_id
         self.call_id = call_id
-        interval_ms = settings.event_flush_interval_ms if flush_interval_ms is None else flush_interval_ms
+        interval_ms = (
+            settings.event_flush_interval_ms if flush_interval_ms is None else flush_interval_ms
+        )
         self._interval = max(0.01, interval_ms / 1000.0)
         self._max_batch = max(1, max_batch)
         self._max_buffer = max(self._max_batch, max_buffer)

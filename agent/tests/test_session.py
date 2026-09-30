@@ -137,7 +137,9 @@ CAMPAIGN = CampaignInfo(
 
 
 def test_substitute_vars() -> None:
-    assert substitute_vars("Hi {{name}}, {{ x }}!{{nope}}", {"name": "Bat", "x": "1"}) == "Hi Bat, 1!"
+    assert (
+        substitute_vars("Hi {{name}}, {{ x }}!{{nope}}", {"name": "Bat", "x": "1"}) == "Hi Bat, 1!"
+    )
     assert substitute_vars("no vars", {}) == "no vars"
 
 
@@ -590,8 +592,10 @@ TURNS = [
 
 
 def test_parse_analysis_variants() -> None:
-    ok = parse_analysis('{"summary": "Харилцагч захиалгаа шалгасан.", "sentiment": "Positive",'
-                        ' "intent": "Order Status"}')
+    ok = parse_analysis(
+        '{"summary": "Харилцагч захиалгаа шалгасан.", "sentiment": "Positive",'
+        ' "intent": "Order Status"}'
+    )
     assert ok is not None
     assert (ok.summary, ok.sentiment, ok.intent) == (
         "Харилцагч захиалгаа шалгасан.",
@@ -609,8 +613,13 @@ def test_parse_analysis_variants() -> None:
 
 
 async def test_analyze_call_uses_llm_json() -> None:
-    model = FakeLLM(['{"summary": "Захиалга ', 'шалгав.", "sentiment": "positive", ',
-                     '"intent": "order_status"}'])
+    model = FakeLLM(
+        [
+            '{"summary": "Захиалга ',
+            'шалгав.", "sentiment": "positive", ',
+            '"intent": "order_status"}',
+        ]
+    )
     result = await analyze_call(
         model,  # type: ignore[arg-type]
         TURNS,
@@ -962,13 +971,16 @@ async def test_run_call_happy_path(
         _speech(stt.SpeechEventType.FINAL_TRANSCRIPT, "калл го сайн уу")
     )
     session.emit(
-        "user_input_transcribed", UserInputTranscribedEvent(transcript="CallGo сайн уу", is_final=True)
+        "user_input_transcribed",
+        UserInputTranscribedEvent(transcript="CallGo сайн уу", is_final=True),
     )
     session.emit(
         "conversation_item_added",
         ConversationItemAddedEvent(item=llm.ChatMessage(role="assistant", content=["Сайн уу"])),
     )
-    session.emit("agent_state_changed", AgentStateChangedEvent(old_state="idle", new_state="listening"))
+    session.emit(
+        "agent_state_changed", AgentStateChangedEvent(old_state="idle", new_state="listening")
+    )
 
     ctx.room.emit("participant_disconnected", ctx.participant)  # customer hangs up
     await asyncio.wait_for(task, 2)

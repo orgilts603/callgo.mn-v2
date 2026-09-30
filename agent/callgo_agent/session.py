@@ -231,8 +231,10 @@ def build_instructions(bootstrap: Bootstrap, *, now: str | None = None) -> str:
         )
 
     direction = bootstrap.call.direction
-    who = "The customer called you." if direction == CallDirection.INBOUND else (
-        "You are calling the customer (outbound call)."
+    who = (
+        "The customer called you."
+        if direction == CallDirection.INBOUND
+        else ("You are calling the customer (outbound call).")
     )
     sections.append("# Customer\n" + who + "\n" + contact_summary(bootstrap))
 
