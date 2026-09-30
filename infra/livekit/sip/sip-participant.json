@@ -1,0 +1,15 @@
+{
+  "sip_trunk_id": "${LK_OUTBOUND_TRUNK_ID}",
+  "sip_call_to": "${LK_CALL_TO}",
+  "sip_number": "${LK_NUMBER}",
+  "room_name": "${LK_ROOM}",
+  "participant_identity": "sip-${LK_CALL_TO_ID}",
+  "participant_name": "CallGo test call ${LK_CALL_TO}",
+  "participant_metadata": "{\"direction\":\"outbound\",\"test\":true}",
+  "participant_attributes": {
+    "callgo.direction": "outbound"
+  },
+  "krisp_enabled": false,
+  "wait_until_answered": true,
+  "play_dialtone": false
+}
