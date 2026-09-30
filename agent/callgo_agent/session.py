@@ -941,9 +941,7 @@ def fallback_analysis(
         if outcome:
             note = _NO_CONTACT_NOTES.get(end_reason, _NO_CONTACT_DEFAULT_NOTE)
     if not customer and end_reason in GATE_SUMMARIES:
-        return CallAnalysis(
-            summary=GATE_SUMMARIES[end_reason], outcome=outcome, outcome_note=note
-        )
+        return CallAnalysis(summary=GATE_SUMMARIES[end_reason], outcome=outcome, outcome_note=note)
     if not turns:
         return CallAnalysis(
             summary="Харилцан яриа бүртгэгдээгүй.", outcome=outcome, outcome_note=note
@@ -1302,6 +1300,94 @@ def call_tools(
     return tools
 
 
+def _profile_needs(old: AgentProfile, new: AgentProfile) -> tuple[bool, bool]:
+    """(new STT needed, new TTS needed) when switching from ``old`` to ``new``."""
+    stt_changed = (old.stt_provider, old.stt_model, old.language) != (
+        new.stt_provider,
+        new.stt_model,
+        new.language,
+    )
+    tts_changed = (old.tts_provider, old.tts_voice, old.language) != (
+        new.tts_provider,
+        new.tts_voice,
+        new.language,
+    )
+    return stt_changed, tts_changed
+
+
+def _same_llm(a: LLMConfig, b: LLMConfig) -> bool:
+    return (a.id, a.provider, a.model, a.base_url) == (b.id, b.provider, b.model, b.base_url)
+
+
+async def refuse_call(
+    ctx: JobContext,
+    f: PipelineFactories,
+    boot: Bootstrap,
+    participant: rtc.RemoteParticipant,
+    gate: CallGate,
+    *,
+    state: CallState,
+    recorder: CallRecorder,
+    usage: UsageTracker,
+) -> None:
+    """Say ``gate.message`` with a TTS-only session (no STT, no LLM) and return.
+
+    The caller is not reported as answered (no ``call.answered``: no recording, no
+    conversation); the finalizer then emits ``call.ended`` with ``gate.end_reason``.
+    """
+    state.set_end_reason(gate.end_reason)
+    recorder.mark_answered()
+    log.info("refusing call %s: %s", boot.call.id, gate.end_reason)
+    try:
+        tts_engine = f.build_tts(boot.profile)
+    except Exception:
+        log.exception("could not build TTS for the %s message; hanging up", gate.end_reason)
+        return
+    session: AgentSession[CallState] = AgentSession(tts=tts_engine, userdata=state)
+    recorder.attach(session)
+    usage.attach(session)
+    try:
+        await session.start(
+            agent=SilentAgent(bootstrap=boot, instructions="Say the given message only."),
+            room=ctx.room,
+            room_options=room_io.RoomOptions(
+                participant_identity=participant.identity,
+                participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_SIP],
+                audio_input=False,
+                text_input=False,
+                close_on_disconnect=True,
+            ),
+        )
+        handle = session.say(gate.message, allow_interruptions=False)
+        await asyncio.wait_for(handle.wait_for_playout(), timeout=REFUSAL_PLAYOUT_TIMEOUT_SEC)
+    except Exception as exc:  # noqa: BLE001 - the call ends either way
+        log.warning("%s message not played: %r", gate.end_reason, exc)
+    finally:
+        with contextlib.suppress(Exception):
+            await session.aclose()
+
+
+async def run_menu(
+    route: ResolvedRoute,
+    session: Any,
+    room: Any,
+    caller_identity: str,
+    *,
+    keys: KeyQueue | None = None,
+) -> MenuResult:
+    """Run the IVR menu on a started session: DTMF from the caller plus spoken keys."""
+    queue = keys or KeyQueue()
+    detach = [
+        attach_dtmf(room, queue, caller_identity),
+        attach_spoken_keys(session, queue, route.menu),
+    ]
+    try:
+        return await MenuFlow(route, SessionPromptPlayer(session), queue).run()
+    finally:
+        for d in detach:
+            d()
+
+
 async def run_call(
     ctx: JobContext,
     client: BackendClient,
@@ -1364,8 +1450,13 @@ async def run_call(
     emitter = EventEmitter(client, org_id=boot.org.id, call_id=boot.call.id)
     emitter.start()
     state = CallState(bootstrap=boot)
+    state.on_handoff_request = lambda _reason: emitter.call_handoff("requested")
     recorder = CallRecorder(emitter, boot, hit_sink=client)
-    finalizer = CallFinalizer(state=state, recorder=recorder, emitter=emitter, control=control)
+    recorder.passive = lambda: state.passive
+    usage = UsageTracker()
+    finalizer = CallFinalizer(
+        state=state, recorder=recorder, emitter=emitter, control=control, usage=usage
+    )
     finalizers.append(finalizer)
 
     if meta.direction == CallDirection.OUTBOUND and not await wait_for_answer(
@@ -1376,6 +1467,15 @@ async def run_call(
         ctx.shutdown("no answer")
         return
 
+    gate = gate_for(boot)
+    if gate is not None:
+        await refuse_call(
+            ctx, f, boot, participant, gate, state=state, recorder=recorder, usage=usage
+        )
+        await finalizer.finalize()
+        ctx.shutdown(gate.end_reason)
+        return
+
     chain = select_llm_chain(boot)
     try:
         if chain is None:
@@ -1383,7 +1483,7 @@ async def run_call(
         model = f.build_llm(chain[0], chain[1])
         finalizer.model = model  # closed by the finalizer even if STT/TTS fail below
         llm_label = f.describe_llm(chain[0])
-        finalizer.llm_label = recorder.llm_label = llm_label
+        finalizer.llm_label = recorder.llm_label = usage.llm_model = llm_label
         stt_engine = f.build_stt(boot.profile)
         tts_engine = f.build_tts(boot.profile)
     except Exception:
@@ -1403,6 +1503,7 @@ async def run_call(
         userdata=state,
     )
     recorder.attach(session)
+    usage.attach(session)
 
     closed: asyncio.Future[CloseReason | None] = asyncio.get_running_loop().create_future()
 
@@ -1420,10 +1521,72 @@ async def run_call(
     session.on("close", _on_close)
     ctx.room.on("participant_disconnected", _on_participant_left)
 
-    agent = CallGoAgent(
-        bootstrap=boot,
-        tools=call_tools(state, control, client),
-        on_stt_final=recorder.on_stt_final,
+    def make_agent(b: Bootstrap, **engines: Any) -> CallGoAgent:
+        return CallGoAgent(
+            bootstrap=b,
+            tools=call_tools(state, control, client),
+            on_stt_final=recorder.on_stt_final,
+            is_passive=lambda: state.passive,
+            **engines,
+        )
+
+    async def continue_with(chosen: Bootstrap) -> None:
+        """Switch from the menu to the conversational agent for ``chosen``'s profile."""
+        engines: dict[str, Any] = {}
+        if chosen is not boot:
+            state.bootstrap = recorder.bootstrap = chosen
+            new_chain = select_llm_chain(chosen)
+            try:
+                if (
+                    new_chain is not None
+                    and chain is not None
+                    and not _same_llm(new_chain[0], chain[0])
+                ):
+                    new_model = f.build_llm(new_chain[0], new_chain[1])
+                    engines["llm"] = new_model
+                    if finalizer.model is not None:
+                        finalizer.retired_models.append(finalizer.model)
+                    finalizer.model = new_model
+                    label = f.describe_llm(new_chain[0])
+                    finalizer.llm_label = recorder.llm_label = usage.llm_model = label
+                need_stt, need_tts = _profile_needs(boot.profile, chosen.profile)
+                if need_stt:
+                    engines["stt"] = f.build_stt(chosen.profile)
+                if need_tts:
+                    engines["tts"] = f.build_tts(chosen.profile)
+            except Exception:
+                log.exception("could not build engines for profile %s", chosen.profile.id)
+        session.update_agent(make_agent(chosen, **engines))
+
+    async def menu_then_agent(route: ResolvedRoute) -> None:
+        chosen = boot
+        try:
+            result = await run_menu(route, session, ctx.room, participant.identity)
+            option = result.option
+            if option is not None and option.agent_profile_id != boot.profile.id:
+                chosen = await client.bootstrap(
+                    room=room_name,
+                    sip_number=sip.trunk_phone_number,
+                    from_number=from_number,
+                    to_number=to_number,
+                    direction=meta.direction,
+                    call_id=boot.call.id,
+                    profile_id=option.agent_profile_id,
+                )
+            elif option is None:
+                log.info("menu timed out; continuing with profile %s", boot.profile.id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("menu flow failed; continuing with profile %s", boot.profile.id)
+            chosen = boot
+        await continue_with(chosen)
+
+    route = menu_route(boot)
+    agent: CallGoAgent = (
+        SilentAgent(bootstrap=boot, on_stt_final=recorder.on_stt_final)
+        if route is not None
+        else make_agent(boot)
     )
     recorder.mark_answered()
     emitter.call_answered(
@@ -1454,14 +1617,40 @@ async def run_call(
         ctx.shutdown("session start failed")
         return
 
+    handoff: HandoffController | None = None
+    if boot.handoff.enabled:
+        stt_lexicon = lexicon_for(boot.lexicon, LexiconScope.STT)
+
+        def _operator_final(text: str, confidence: float, duration: float) -> None:
+            corrected, _ = normalize_stt_text(text, stt_lexicon)
+            recorder.add_operator_turn(corrected, text, confidence, duration)
+
+        handoff = HandoffController(
+            ctx.room,
+            session,
+            state,
+            emitter,
+            customer_identity=participant.identity,
+            observer=recorder,
+            transcribe=OperatorTranscriber(stt_engine, vad_model, _operator_final),
+        )
+        handoff.start()
+
+    background: list[asyncio.Task[None]] = []
     max_sec = boot.profile.max_duration_sec or settings.max_call_duration_sec
-    timer = asyncio.create_task(
-        enforce_max_duration(session, state, max_sec, boot.profile.language)
+    background.append(
+        asyncio.create_task(enforce_max_duration(session, state, max_sec, boot.profile.language))
     )
+    if route is not None:
+        background.append(asyncio.create_task(menu_then_agent(route), name="callgo-menu"))
     try:
         close_reason = await closed
     finally:
-        timer.cancel()
+        for task in background:
+            task.cancel()
+        await asyncio.gather(*background, return_exceptions=True)
         ctx.room.off("participant_disconnected", _on_participant_left)
+        if handoff is not None:
+            await handoff.aclose()
     await finalizer.finalize(close_reason)
     ctx.shutdown(state.end_reason or "call ended")

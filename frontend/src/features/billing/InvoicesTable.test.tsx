@@ -1,4 +1,5 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react'
+import { onTestFinished } from 'vitest'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { useLive } from '@/lib/ws'
@@ -56,13 +57,15 @@ describe('InvoicesTable', () => {
 
   it('"Харах" fetches the PDF with the bearer token and opens it via an object URL', async () => {
     mockGet()
-    const blob = new Blob(['%PDF-1.4'], { type: 'application/pdf' })
-    const fetchMock = vi.fn(async () => new Response(blob, { status: 200, headers: { 'Content-Type': 'application/pdf' } }))
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, statusText: 'OK', blob: async () => new Blob(['%PDF-1.4'], { type: 'application/pdf' }) }))
     vi.stubGlobal('fetch', fetchMock)
     const tab = { opener: {} as unknown, location: { href: '' }, close: vi.fn() }
     const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window)
-    const createUrl = vi.fn(() => 'blob:pdf-1')
-    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: createUrl, revokeObjectURL: vi.fn() }))
+    const createUrl = vi.fn((b: Blob) => (b.type === 'application/pdf' ? 'blob:pdf-1' : 'blob:wrong'))
+    const saved = { create: URL.createObjectURL, revoke: URL.revokeObjectURL }
+    URL.createObjectURL = createUrl
+    URL.revokeObjectURL = vi.fn()
+    onTestFinished(() => { URL.createObjectURL = saved.create; URL.revokeObjectURL = saved.revoke })
 
     renderWith(<InvoicesTable />)
     const rows = await screen.findAllByTestId('invoice-row')
@@ -79,7 +82,7 @@ describe('InvoicesTable', () => {
 
   it('closes the tab and toasts when the PDF request fails', async () => {
     mockGet()
-    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 500, statusText: 'Internal Server Error' })))
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, statusText: 'Internal Server Error', blob: async () => new Blob([]) })))
     const tab = { opener: null, location: { href: '' }, close: vi.fn() }
     vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window)
     renderWith(<InvoicesTable />)
