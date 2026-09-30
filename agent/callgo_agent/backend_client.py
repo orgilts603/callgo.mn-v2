@@ -2,7 +2,7 @@
 
 Endpoints (all under ``/internal/agent``, header ``X-Agent-Token``):
 
-* ``GET  /bootstrap``   -> :class:`~callgo_agent.schemas.Bootstrap`
+* ``GET  /bootstrap``   -> :class:`~callgo_agent.schemas.Bootstrap` (``profileId`` overrides)
 * ``POST /events``      ``{"events": [Event...]}`` -> ``{"accepted": N}``
 * ``POST /lexicon-hit`` ``{"ids": [uuid]}`` -> 204
 * ``POST /knowledge/search`` ``{"knowledgeBaseId", "query", "k"}`` -> ``{"hits": [KnowledgeHit]}``
@@ -112,8 +112,13 @@ class BackendClient:
         to_number: str = "",
         direction: CallDirection | str = CallDirection.INBOUND,
         call_id: UUID | str | None = None,
+        profile_id: UUID | str | None = None,
     ) -> Bootstrap:
-        """Resolve the call's org, profile, LLM chain, lexicon, contact and campaign."""
+        """Resolve the call's org, profile, LLM chain, lexicon, contact and campaign.
+
+        ``profile_id`` (query ``profileId``) overrides the routed agent profile, e.g. after
+        the caller picked an inbound menu option.
+        """
         params: dict[str, str] = {"room": room}
         if sip_number:
             params["sipNumber"] = sip_number
@@ -124,6 +129,8 @@ class BackendClient:
         params["direction"] = CallDirection(direction).value
         if call_id:
             params["callId"] = str(call_id)
+        if profile_id:
+            params["profileId"] = str(profile_id)
 
         resp = await self._request("GET", BOOTSTRAP_PATH, params=params)
         try:

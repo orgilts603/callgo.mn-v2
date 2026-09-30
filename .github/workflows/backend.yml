@@ -1,0 +1,71 @@
+name: backend
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
+      - "docs/**"
+  pull_request:
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend.yml"
+      - "docs/**"
+
+concurrency:
+  group: backend-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: go vet + test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: callgo
+          POSTGRES_PASSWORD: callgo
+          POSTGRES_DB: callgo
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U callgo -d callgo"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CALLGO_TEST_DATABASE_URL: postgres://callgo:callgo@localhost:5432/callgo_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Create the test database
+        working-directory: .
+        run: |
+          PGPASSWORD=callgo psql -h localhost -U callgo -d callgo -v ON_ERROR_STOP=1 \
+            -c 'CREATE DATABASE callgo_test'
+          PGPASSWORD=callgo psql -h localhost -U callgo -d callgo_test -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION IF NOT EXISTS vector'
+
+      - name: gofmt
+        run: test -z "$(gofmt -l . | tee /dev/stderr)"
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test -race
+        run: go test -race -count=1 ./...

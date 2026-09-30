@@ -1,23 +1,63 @@
-import { useCallback, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { ArrowRight, Ban, Clock, Download, Megaphone, PhoneForwarded, PhoneOff, User } from 'lucide-react'
+import { ArrowRight, Ban, Clock, Download, Headset, Megaphone, PhoneForwarded, PhoneOff, User } from 'lucide-react'
 import {
-  AgentStateBadge, Button, Card, CallStatusBadge, ConfirmDialog, Drawer, EmptyState, Field, Input, Skeleton,
+  AgentStateBadge, Badge, Button, Card, CallStatusBadge, ConfirmDialog, Drawer, EmptyState, Field, Input, Skeleton,
 } from '@/components/ui'
+import { useAuth } from '@/app/auth'
 import { api } from '@/lib/api'
 import { dncKey } from '@/features/settings/hooks'
 import { fmtDateTime, fmtPhone } from '@/lib/utils'
-import type { Call, Contact } from '@/lib/types'
+import type { Call, Contact, Plan, User as OrgUser } from '@/lib/types'
 import { isLiveStatus, useCallDetail, useCampaignNames } from './api'
-import { AudioPlayer, type AudioPlayerHandle } from './AudioPlayer'
+import { AudioPlayer, isRecordingReady, useRecordingUrl, type AudioPlayerHandle } from './AudioPlayer'
 import { CallDuration, DirectionIcon } from './callFormat'
 import { HangupDialog, TransferDialog } from './CallActions'
 import { SummaryCard } from './SummaryCard'
 import { Transcript } from './Transcript'
+import { UsageLine } from './UsageLine'
 import { useCallCacheSync } from './useCallCacheSync'
 import { useCallEvents, type CallEventsState } from './useCallEvents'
+
+// livekit-client is heavy: only load it once an operator actually takes over a call.
+const OperatorConsole = lazy(() => import('./OperatorConsole').then((m) => ({ default: m.OperatorConsole })))
+
+/** Plan features of the current org, or null while unknown (then features are assumed available). */
+function usePlanFeatures(): string[] | null {
+  const q = useQuery({
+    queryKey: ['billing', 'subscription'],
+    queryFn: () => api.get<{ plan?: Plan | null; limits?: Plan | null }>('/billing/subscription'),
+    staleTime: 60_000,
+    retry: false,
+  })
+  const features = q.data?.limits?.features ?? q.data?.plan?.features
+  return Array.isArray(features) ? features : null
+}
+
+const HANDOFF_LABEL = { requested: 'Оператор холбогдож байна', active: 'Оператор ярьж байна', ended: 'Оператор гарсан' } as const
+const HANDOFF_TONE = { requested: 'warning', active: 'success', ended: 'neutral' } as const
+
+/** Badge for `call.handoff` plus the operator's name ("Та" for the signed-in user). */
+function HandoffBadge({ call }: { call: Call }) {
+  const me = useAuth((s) => s.user)
+  const other = !!call.operatorId && call.operatorId !== me?.id
+  const members = useQuery({
+    queryKey: ['org', 'members'],
+    queryFn: () => api.get<{ items: OrgUser[] }>('/org/members'),
+    enabled: other,
+    staleTime: 5 * 60_000,
+    retry: false,
+  })
+  if (!call.handoff) return null
+  const name = !call.operatorId ? '' : call.operatorId === me?.id ? 'Та' : (members.data?.items.find((u) => u.id === call.operatorId)?.name ?? '')
+  return (
+    <Badge tone={HANDOFF_TONE[call.handoff]} dot pulse={call.handoff !== 'ended'} data-testid="handoff-badge">
+      <Headset className="h-3 w-3" aria-hidden /> {HANDOFF_LABEL[call.handoff]}{name ? ` · ${name}` : ''}
+    </Badge>
+  )
+}
 
 export interface CallDrawerProps {
   /** Call to show; `null` closes the drawer. */
@@ -39,6 +79,7 @@ function CallHeader({ call, contact, events }: { call?: Call; contact?: Contact 
         </span>
         <CallStatusBadge status={call.status} />
         {live && events.agentState && <AgentStateBadge state={events.agentState} />}
+        <HandoffBadge call={call} />
       </div>
       <div className="flex min-w-0 items-center gap-x-3 overflow-hidden whitespace-nowrap text-xs text-[var(--fg-muted)]">
         {contactName && <span className="inline-flex items-center gap-1"><User className="h-3 w-3" />{contactName}</span>}
@@ -84,6 +125,24 @@ function DncDialog({ call, onClose }: { call: Pick<Call, 'id' | 'direction' | 'f
   )
 }
 
+/** "Бичлэг татах": a plain link to the signed URL once it is available (shares the player's request). */
+function RecordingDownload({ callId, enabled }: { callId: string; enabled: boolean }) {
+  const signed = useRecordingUrl(callId, enabled)
+  if (enabled && signed.data?.url) {
+    return (
+      <a href={signed.data.url} download target="_blank" rel="noreferrer"
+        className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] border border-[var(--border)] px-2.5 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface-2)]">
+        <Download className="h-3.5 w-3.5" /> Бичлэг татах
+      </a>
+    )
+  }
+  return (
+    <Button variant="outline" size="sm" disabled title={enabled ? 'Бичлэгийн холбоос ачаалж байна' : 'Бичлэг байхгүй'}>
+      <Download className="h-3.5 w-3.5" /> Бичлэг татах
+    </Button>
+  )
+}
+
 function DrawerBody({ callId, events }: { callId: string; events: CallEventsState }) {
   const { data, isLoading, error } = useCallDetail(callId)
   const playerRef = useRef<AudioPlayerHandle>(null)
@@ -91,6 +150,9 @@ function DrawerBody({ callId, events }: { callId: string; events: CallEventsStat
   const [confirmHangup, setConfirmHangup] = useState(false)
   const [transferOpen, setTransferOpen] = useState(false)
   const [dncOpen, setDncOpen] = useState(false)
+  const [consoleOpen, setConsoleOpen] = useState(false)
+  const me = useAuth((s) => s.user)
+  const planFeatures = usePlanFeatures()
   const seek = useCallback((ms: number) => playerRef.current?.seekMs(ms), [])
 
   if (isLoading) {
@@ -109,7 +171,10 @@ function DrawerBody({ callId, events }: { callId: string; events: CallEventsStat
   const canHangup = call.status === 'active' || call.status === 'ringing'
   // Final turns are merged into the query cache by useCallCacheSync.
   const turns = data.turns
-  const hasRecording = !!call.recordingUrl
+  const hasRecording = isRecordingReady(call.recording, call.recordingUrl)
+  const canTakeOver = call.status === 'active'
+  const handoffAllowed = planFeatures === null || planFeatures.includes('handoff')
+  const heldByOther = (call.handoff === 'requested' || call.handoff === 'active') && !!call.operatorId && call.operatorId !== me?.id
 
   return (
     <div className="space-y-4 p-5">
@@ -117,6 +182,12 @@ function DrawerBody({ callId, events }: { callId: string; events: CallEventsStat
         {canHangup && (
           <Button variant="danger" size="sm" onClick={() => setConfirmHangup(true)}>
             <PhoneOff className="h-3.5 w-3.5" /> Дуудлага таслах
+          </Button>
+        )}
+        {canTakeOver && (
+          <Button variant="primary" size="sm" onClick={() => setConsoleOpen(true)} disabled={!handoffAllowed || heldByOther}
+            title={!handoffAllowed ? 'Энэ боломж таны багцад ороогүй байна' : heldByOther ? 'Өөр оператор дуудлагад орсон байна' : undefined}>
+            <Headset className="h-3.5 w-3.5" /> Дуудлагад орох
           </Button>
         )}
         {canHangup && (
@@ -129,19 +200,13 @@ function DrawerBody({ callId, events }: { callId: string; events: CallEventsStat
             <Ban className="h-3.5 w-3.5" /> Хориглох жагсаалтад нэмэх
           </Button>
         )}
-        {hasRecording ? (
-          <a href={call.recordingUrl} download target="_blank" rel="noreferrer"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border)] px-3 text-xs font-medium text-[var(--fg)] hover:bg-[var(--surface-2)]">
-            <Download className="h-3.5 w-3.5" /> Бичлэг татах
-          </a>
-        ) : (
-          <Button variant="outline" size="sm" disabled title="Бичлэг байхгүй"><Download className="h-3.5 w-3.5" /> Бичлэг татах</Button>
-        )}
+        <RecordingDownload callId={call.id} enabled={hasRecording} />
       </div>
 
-      <AudioPlayer ref={playerRef} url={call.recordingUrl} live={live} onTime={setPlayheadMs} />
+      <AudioPlayer ref={playerRef} callId={call.id} recording={call.recording} recordingUrl={call.recordingUrl} live={live} onTime={setPlayheadMs} />
 
       <SummaryCard call={call} liveModel={events.llmModel} />
+      <UsageLine usage={call.usage} />
 
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between border-b border-[var(--border)] px-4 py-2.5">
@@ -155,6 +220,11 @@ function DrawerBody({ callId, events }: { callId: string; events: CallEventsStat
       {confirmHangup && <HangupDialog call={call} onClose={() => setConfirmHangup(false)} />}
       {dncOpen && <DncDialog call={call} onClose={() => setDncOpen(false)} />}
       {transferOpen && <TransferDialog callId={call.id} onClose={() => setTransferOpen(false)} />}
+      {consoleOpen && (
+        <Suspense fallback={null}>
+          <OperatorConsole call={call} turns={turns} partials={events.partials} onClose={() => setConsoleOpen(false)} />
+        </Suspense>
+      )}
     </div>
   )
 }

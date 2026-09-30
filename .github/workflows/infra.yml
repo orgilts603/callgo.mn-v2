@@ -1,0 +1,45 @@
+name: infra
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - "Makefile"
+      - ".env.example"
+      - ".github/workflows/infra.yml"
+      - "docs/**"
+  pull_request:
+    paths:
+      - "infra/**"
+      - "Makefile"
+      - ".env.example"
+      - ".github/workflows/infra.yml"
+      - "docs/**"
+
+concurrency:
+  group: infra-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: infra-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tooling
+        run: |
+          docker compose version
+          python3 -c "import yaml" 2>/dev/null || sudo apt-get install -y --no-install-recommends python3-yaml
+          sudo apt-get install -y --no-install-recommends shellcheck
+
+      # make infra-check runs infra/scripts/check-infra.sh: YAML/JSON/shell
+      # syntax, shellcheck and `docker compose config` for every profile
+      # (docker compose is preinstalled on ubuntu-latest).
+      - name: make infra-check
+        run: make infra-check

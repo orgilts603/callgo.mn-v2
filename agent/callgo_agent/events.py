@@ -15,15 +15,18 @@ import asyncio
 import contextlib
 import logging
 import uuid
+from collections.abc import Iterable
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from uuid import UUID
 
 from .config import settings
 from .schemas import (
     AgentState,
     Call,
+    CallbackIntent,
     CallEndedPayload,
+    CallUsage,
     Event,
     EventType,
     Speaker,
@@ -31,6 +34,8 @@ from .schemas import (
 )
 
 log = logging.getLogger("callgo.events")
+
+HandoffStatus = Literal["requested", "active", "ended"]
 
 # Events that are only useful live; dropped instead of re-queued when a post fails.
 EPHEMERAL_TYPES: frozenset[str] = frozenset({"transcript.partial", "agent.state"})
@@ -205,8 +210,29 @@ class EventEmitter:
     def agent_state(self, state: AgentState, llm_model: str = "") -> Event | None:
         return self.emit("agent.state", {"state": state, "llmModel": llm_model})
 
-    def call_ended(self, payload: CallEndedPayload) -> Event | None:
-        return self.emit("call.ended", _dump(payload))
+    def call_handoff(self, status: HandoffStatus, operator_id: str = "") -> Event | None:
+        """``call.updated`` with ``{"handoff": status[, "operatorId"]}`` (SaaS additions)."""
+        payload: dict[str, Any] = {"handoff": status}
+        if operator_id:
+            payload["operatorId"] = operator_id
+        return self.emit("call.updated", payload)
+
+    def call_ended(
+        self,
+        payload: CallEndedPayload,
+        *,
+        usage: CallUsage | None = None,
+        callbacks: Iterable[CallbackIntent] = (),
+    ) -> Event | None:
+        """``call.ended``; ``usage`` and ``callbacks`` are added next to the payload fields
+        (``CallEndedPayload`` itself does not carry them)."""
+        body = _dump(payload)
+        if usage is not None:
+            body["usage"] = _dump(usage)
+        cbs = [_dump(c) for c in callbacks]
+        if cbs:
+            body["callbacks"] = cbs
+        return self.emit("call.ended", body)
 
     def system(self, message: str) -> Event | None:
         return self.emit("system", {"message": message})

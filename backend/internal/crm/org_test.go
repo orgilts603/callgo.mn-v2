@@ -71,7 +71,7 @@ func TestOrgsAndUsers(t *testing.T) {
 	require.NotNil(t, users)
 	require.Empty(t, users)
 
-	n, err := s.CountUsers(ctx)
+	n, err := s.CountAllUsers(ctx)
 	require.NoError(t, err)
 	require.Equal(t, 2, n)
 }

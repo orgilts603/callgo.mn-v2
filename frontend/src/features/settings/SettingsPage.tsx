@@ -1,6 +1,7 @@
 import { Navigate, NavLink, useParams } from 'react-router-dom'
-import { Ban, BookOpen, Bot, Building2, Cpu, Phone } from 'lucide-react'
+import { Ban, BookOpen, Bot, Building2, Cpu, Phone, PhoneCall, Plug } from 'lucide-react'
 import type { ComponentType } from 'react'
+import { CreditCard } from 'lucide-react'
 import { PageHeader } from '@/components/ui'
 import { cn } from '@/lib/utils'
 import SIPNumbersTab from './SIPNumbersTab'
@@ -9,6 +10,9 @@ import LLMConfigsTab from './LLMConfigsTab'
 import OrganizationTab from './OrganizationTab'
 import DoNotCallTab from './DoNotCallTab'
 import KnowledgeTab from './KnowledgeTab'
+import IntegrationsTab from './IntegrationsTab'
+import CallbacksTab from '../callbacks/CallbacksTab'
+import BillingPage from '../billing/BillingPage'
 
 export const SETTINGS_TABS = [
   { id: 'sip-numbers', label: 'SIP дугаарууд', icon: Phone, Component: SIPNumbersTab },
@@ -17,6 +21,9 @@ export const SETTINGS_TABS = [
   { id: 'organization', label: 'Байгууллага', icon: Building2, Component: OrganizationTab },
   { id: 'knowledge', label: 'Мэдлэгийн сан', icon: BookOpen, Component: KnowledgeTab },
   { id: 'dnc', label: 'Хориглосон дугаар', icon: Ban, Component: DoNotCallTab },
+  { id: 'integrations', label: 'Интеграц', icon: Plug, Component: IntegrationsTab },
+  { id: 'callbacks', label: 'Буцаж залгах', icon: PhoneCall, Component: CallbacksTab },
+  { id: 'billing', label: 'Төлбөр', icon: CreditCard, Component: BillingPage },
 ] as const satisfies readonly { id: string; label: string; icon: ComponentType<{ className?: string }>; Component: ComponentType }[]
 
 export default function SettingsPage() {

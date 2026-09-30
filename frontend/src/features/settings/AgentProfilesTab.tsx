@@ -4,6 +4,7 @@ import { Bot, Mic, Pencil, Plus, Timer, Trash2, Volume2, Wand2 } from 'lucide-re
 import { Badge, Button, Card, CardBody, Drawer, EmptyState, Field, Input, Select, Skeleton, Textarea } from '@/components/ui'
 import { fmtDuration } from '@/lib/utils'
 import type { AgentProfile, KnowledgeMode, LLMConfig } from '@/lib/types'
+import { PostCallActionsEditor, normalizePostCallActions, postCallActionsValid } from './PostCallActionsEditor'
 import { useAgentProfiles, useDeleteAgentProfile, useKnowledgeBases, useLLMConfigs, useSaveAgentProfile, type AgentProfileBody } from './hooks'
 import { ConfirmDialog, ErrorNote, errMsg } from './common'
 
@@ -46,7 +47,7 @@ function emptyBody(): AgentProfileBody {
   return {
     name: '', systemPrompt: '', greeting: 'Сайн байна уу, танд юугаар туслах вэ?', language: 'mn', llmConfigId: null,
     sttProvider: 'faster_whisper', sttModel: 'large-v3', ttsProvider: 'piper', ttsVoice: '', maxDurationSec: 600,
-    tools: ['end_call'], transferNumber: '', knowledgeBaseId: null, knowledgeMode: 'off',
+    tools: ['end_call'], transferNumber: '', knowledgeBaseId: null, knowledgeMode: 'off', postCallActions: [],
   }
 }
 function fromProfile(p: AgentProfile): AgentProfileBody {
@@ -55,6 +56,7 @@ function fromProfile(p: AgentProfile): AgentProfileBody {
     sttProvider: p.sttProvider, sttModel: p.sttModel, ttsProvider: p.ttsProvider, ttsVoice: p.ttsVoice, maxDurationSec: p.maxDurationSec,
     tools: p.tools ?? [], transferNumber: p.transferNumber ?? '',
     knowledgeBaseId: p.knowledgeBaseId ?? null, knowledgeMode: p.knowledgeBaseId ? (p.knowledgeMode ?? 'off') : 'off',
+    postCallActions: (p.postCallActions ?? []).map((a) => ({ ...a, outcomes: [...(a.outcomes ?? [])] })),
   }
 }
 
@@ -84,10 +86,11 @@ function ProfileForm({ initial, llmConfigs, onClose }: { initial?: AgentProfile 
   function submit(e: FormEvent) {
     e.preventDefault()
     setTouched(true)
-    if (!f.name.trim() || (f.tools.includes('transfer_call') && !f.transferNumber?.trim())) return
+    if (!f.name.trim() || (f.tools.includes('transfer_call') && !f.transferNumber?.trim()) || !postCallActionsValid(f.postCallActions ?? [])) return
     const body: AgentProfileBody = {
       ...f, name: f.name.trim(), transferNumber: f.transferNumber?.trim() || undefined,
       knowledgeBaseId: f.knowledgeBaseId || null, knowledgeMode: f.knowledgeBaseId ? f.knowledgeMode : 'off',
+      postCallActions: normalizePostCallActions(f.postCallActions ?? []),
     }
     save.mutate({ id: initial?.id, body }, {
       onSuccess: () => { toast.success(initial ? 'Профайл шинэчлэгдлээ' : 'Профайл үүслээ'); onClose() },
@@ -171,6 +174,8 @@ function ProfileForm({ initial, llmConfigs, onClose }: { initial?: AgentProfile 
           })}
         </div>
       </div>
+
+      <PostCallActionsEditor value={f.postCallActions ?? []} onChange={(v) => set('postCallActions', v)} showErrors={touched} />
 
       <ErrorNote error={save.error} />
       <div className="sticky bottom-0 -mx-5 flex justify-end gap-2 border-t border-[var(--border)] bg-[var(--surface-1)] px-5 py-3">

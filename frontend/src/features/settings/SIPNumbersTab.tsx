@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { toast } from 'sonner'
-import { ArrowDownLeft, ArrowUpRight, Check, Pencil, Phone, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowDownLeft, ArrowUpRight, Check, Pencil, Phone, Plus, RefreshCw, Route, Trash2 } from 'lucide-react'
 import {
   Badge, Button, Card, CardBody, Dialog, EmptyState, Field, Input, Select, Skeleton, Table, TBody, TD, TH, THead, TR,
 } from '@/components/ui'
@@ -8,6 +8,7 @@ import { fmtPhone } from '@/lib/utils'
 import type { AgentProfile, SIPNumber } from '@/lib/types'
 import { useAgentProfiles, useDeleteSIPNumber, useProvisionSIPNumber, useSaveSIPNumber, useSIPNumbers, type SIPNumberBody } from './hooks'
 import { ConfirmDialog, ErrorNote, SwitchRow, errMsg } from './common'
+import { RoutingEditor } from './RoutingEditor'
 
 const E164 = /^\+[1-9]\d{6,14}$/
 
@@ -99,6 +100,7 @@ export default function SIPNumbersTab() {
   const [editing, setEditing] = useState<SIPNumber | null>(null)
   const [creating, setCreating] = useState(false)
   const [deleting, setDeleting] = useState<SIPNumber | null>(null)
+  const [routingId, setRoutingId] = useState<string | null>(null)
   const profileName = (id?: string | null) => profiles.data?.find((p) => p.id === id)?.name
 
   const items = numbers.data ?? []
@@ -155,6 +157,7 @@ export default function SIPNumbersTab() {
                   </TD>
                   <TD className="text-right">
                     <div className="flex justify-end gap-1">
+                      <Button size="sm" variant="outline" aria-label={`Чиглүүлэлт ${n.number}`} onClick={() => setRoutingId(n.id)}><Route className="h-3.5 w-3.5" />Чиглүүлэлт</Button>
                       <Button size="icon" variant="ghost" aria-label={`Засах ${n.number}`} onClick={() => setEditing(n)}><Pencil className="h-4 w-4" /></Button>
                       <Button size="icon" variant="ghost" aria-label={`Устгах ${n.number}`} onClick={() => setDeleting(n)}><Trash2 className="h-4 w-4 text-red-400" /></Button>
                     </div>
@@ -167,6 +170,7 @@ export default function SIPNumbersTab() {
       </Card>
 
       <SIPNumberDialog open={creating || editing !== null} initial={editing} profiles={profiles.data ?? []} onClose={() => { setCreating(false); setEditing(null) }} />
+      <RoutingEditor open={routingId !== null} number={items.find((n) => n.id === routingId) ?? null} profiles={profiles.data ?? []} onClose={() => setRoutingId(null)} />
       <ConfirmDialog
         open={deleting !== null} title="Дугаар устгах уу?" description={deleting ? `${fmtPhone(deleting.number)} — LiveKit trunk болон dispatch rule мөн устна.` : undefined}
         loading={del.isPending} onClose={() => setDeleting(null)}

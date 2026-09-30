@@ -15,10 +15,14 @@ var allTables = []string{
 	"organizations", "users", "llm_configs", "agent_profiles", "sip_numbers", "contacts",
 	"calls", "call_transcripts", "campaigns", "campaign_targets", "lexicon_corrections", "do_not_call",
 	"knowledge_bases", "knowledge_documents", "knowledge_chunks",
+	// 000005 (SaaS identity + billing)
+	"invitations", "password_resets", "email_verifications", "refresh_sessions", "api_keys", "audit_log",
+	"subscriptions", "usage_records", "invoices", "payments",
 }
 
-// latestVersion is the number of the newest embedded migration.
-const latestVersion = 4
+// latestVersion is the lowest acceptable newest embedded migration (others
+// may be added concurrently, so tests assert version >= latestVersion).
+const latestVersion = 5
 
 // columnExists reports whether table.column exists in the public schema.
 func columnExists(t *testing.T, ctx context.Context, table, column string) bool {
@@ -68,7 +72,7 @@ func TestMigrationsUpDownIdempotent(t *testing.T) {
 	var version int
 	var dirty bool
 	require.NoError(t, testPool.QueryRow(ctx, `SELECT version, dirty FROM schema_migrations`).Scan(&version, &dirty))
-	require.Equal(t, latestVersion, version)
+	require.GreaterOrEqual(t, version, latestVersion)
 	require.False(t, dirty)
 }
 
