@@ -18,7 +18,7 @@ export function AppShell() {
 
   return (
     <div className="flex min-h-screen min-w-[1024px] bg-[var(--surface-0)] text-[var(--fg)]">
-      <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[60] focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-1.5 focus:text-xs focus:text-white">
+      <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[60] focus:rounded-md focus:bg-[var(--accent)] focus:px-3 focus:py-1.5 focus:text-xs focus:text-[var(--fg-on-accent)]">
         Үндсэн агуулга руу шилжих
       </a>
       <Sidebar />

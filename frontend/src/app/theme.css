@@ -1,82 +1,86 @@
-/* CallGo.mn design tokens — "Midnight Navy".
- * Owned by the app-shell agent. Components reference these as var(--token)
- * (e.g. bg-[var(--surface-1)]) or through the Tailwind aliases declared in
- * the @theme block below (e.g. bg-surface-1, text-fg-muted, border-border).
- * Dark is the default; [data-theme="light"] on <html> switches to light. */
+/* CallGo.mn design tokens — "Graphite" (Linear / Stripe style minimalist dark).
+ * Components reference these as var(--token) (e.g. bg-[var(--surface-1)]) or
+ * through the Tailwind aliases declared in the @theme block below.
+ * Dark is the default; [data-theme="light"] on <html> switches to light.
+ *
+ * Rules: neutral zinc surfaces, hairline white/8% borders, white primary
+ * action. Colour is reserved for state only: emerald = active/online,
+ * amber = attention, rose = negative/failed. */
 
 :root {
   color-scheme: dark;
 
-  /* Surfaces (back → front) */
-  --surface-0: #0b1020;      /* page background */
-  --surface-1: #111832;      /* cards, sidebar */
-  --surface-2: #182042;      /* hover, inputs, subtle fills */
-  --surface-3: #202a55;      /* pressed / selected */
-  --surface-inset: #080c19;  /* wells, code, input bg */
-  --surface-overlay: #131b38;/* popovers, menus, tooltips */
-  --backdrop: rgb(3 6 16 / 0.66);
+  /* Surfaces (back → front) — zinc scale */
+  --surface-0: #09090b;               /* page background (zinc-950) */
+  --surface-1: #111114;               /* cards, sidebar */
+  --surface-2: #18181b;               /* hover, inputs, subtle fills (zinc-900) */
+  --surface-3: #27272a;               /* pressed / selected (zinc-800) */
+  --surface-inset: #0c0c0e;           /* wells, code, input bg */
+  --surface-overlay: #141417;         /* popovers, menus, tooltips */
+  --backdrop: rgb(0 0 0 / 0.6);
 
-  /* Borders */
-  --border: #253061;
-  --border-subtle: #1b2449;
-  --border-strong: #34407a;
+  /* Borders — hairlines on white alpha so they read the same on every surface */
+  --border: rgb(255 255 255 / 0.08);
+  --border-subtle: rgb(255 255 255 / 0.05);
+  --border-strong: rgb(255 255 255 / 0.14);
+  --border-highlight: rgb(255 255 255 / 0.15); /* card top edge light */
 
-  /* Foreground tiers */
-  --fg: #e6e9f5;
-  --fg-muted: #9aa3c7;
-  --fg-subtle: #5f6a99;
-  --fg-disabled: #465081;
-  --fg-on-accent: #ffffff;
+  /* Foreground tiers (zinc-50 / 400 / 500 / 600) */
+  --fg: #fafafa;
+  --fg-muted: #a1a1aa;
+  --fg-subtle: #71717a;
+  --fg-disabled: #52525b;
+  --fg-on-accent: #09090b;
 
-  /* Accent (indigo → violet) */
-  --accent: #6366f1;
-  --accent-hover: #4f46e5;
-  --accent-fg: #c7d2fe;       /* accent-coloured text on dark */
-  --accent-soft: rgb(99 102 241 / 0.14);
-  --accent-border: rgb(99 102 241 / 0.4);
-  --accent-2: #8b5cf6;        /* violet, secondary accent */
-  --accent-2-soft: rgb(139 92 246 / 0.14);
+  /* Accent — monochrome: the primary action is a white button on black. */
+  --accent: #fafafa;
+  --accent-hover: #e4e4e7;
+  --accent-fg: #fafafa;
+  --accent-soft: rgb(255 255 255 / 0.06);
+  --accent-border: rgb(255 255 255 / 0.12);
+  --accent-2: #a1a1aa;
+  --accent-2-soft: rgb(161 161 170 / 0.12);
 
-  /* Semantic */
-  --success: #34d399;
-  --success-fg: #6ee7b7;
+  /* Semantic — the only chroma on the page */
+  --success: #10b981;                 /* emerald-500: active / online */
+  --success-fg: #34d399;
   --success-soft: rgb(16 185 129 / 0.12);
-  --success-border: rgb(16 185 129 / 0.32);
-  --warning: #fbbf24;
-  --warning-fg: #fcd34d;
+  --success-border: rgb(16 185 129 / 0.3);
+  --warning: #f59e0b;                 /* amber-500: attention */
+  --warning-fg: #fbbf24;
   --warning-soft: rgb(245 158 11 / 0.12);
-  --warning-border: rgb(245 158 11 / 0.32);
-  --danger: #f87171;
-  --danger-fg: #fca5a5;
-  --danger-solid: #dc2626;
-  --danger-solid-hover: #b91c1c;
-  --danger-soft: rgb(239 68 68 / 0.12);
-  --danger-border: rgb(239 68 68 / 0.32);
-  --info: #38bdf8;
-  --info-fg: #7dd3fc;
-  --info-soft: rgb(14 165 233 / 0.12);
-  --info-border: rgb(14 165 233 / 0.32);
-  --neutral-dot: #8891b8;
+  --warning-border: rgb(245 158 11 / 0.3);
+  --danger: #f43f5e;                  /* rose-500: negative / failed */
+  --danger-fg: #fb7185;
+  --danger-solid: #e11d48;
+  --danger-solid-hover: #be123c;
+  --danger-soft: rgb(244 63 94 / 0.12);
+  --danger-border: rgb(244 63 94 / 0.3);
+  --info: #a1a1aa;                    /* "info" is neutral: no blue */
+  --info-fg: #d4d4d8;
+  --info-soft: rgb(255 255 255 / 0.06);
+  --info-border: rgb(255 255 255 / 0.12);
+  --neutral-dot: #71717a;
 
   /* Focus */
-  --focus-ring: rgb(129 140 248 / 0.7);
+  --focus-ring: rgb(255 255 255 / 0.4);
   --focus-ring-offset: var(--surface-0);
 
-  /* Charts (validated categorical pairs, dark surface) */
-  --chart-1: #7478f0;          /* inbound */
-  --chart-2: #26a69a;          /* outbound / completed */
-  --chart-3: #e5484d;          /* failed */
-  --chart-grid: #1d2650;
-  --chart-axis: #5f6a99;
-  --chart-cursor: rgb(129 140 248 / 0.12);
+  /* Charts: one neutral series + state colours */
+  --chart-1: #e4e4e7;                 /* inbound (zinc-200) */
+  --chart-2: #10b981;                 /* outbound / completed (emerald) */
+  --chart-3: #f43f5e;                 /* failed (rose) */
+  --chart-grid: rgb(255 255 255 / 0.06);
+  --chart-axis: #71717a;
+  --chart-cursor: rgb(255 255 255 / 0.05);
 
   /* Elevation & shape */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.3);
-  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.35), 0 1px 2px rgb(0 0 0 / 0.3);
-  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.5), 0 2px 6px rgb(0 0 0 / 0.35);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 12px rgb(0 0 0 / 0.45), 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-lg: 0 16px 48px rgb(0 0 0 / 0.6), 0 2px 6px rgb(0 0 0 / 0.45);
   --radius-sm: 6px;
   --radius: 8px;
-  --radius-lg: 12px;
+  --radius-lg: 10px;
 
   /* Layout */
   --sidebar-w: 232px;
@@ -85,10 +89,10 @@
   --content-max: 1440px;
 
   /* Scrollbar */
-  --scrollbar-thumb: #27315f;
-  --scrollbar-thumb-hover: #34407a;
+  --scrollbar-thumb: #27272a;
+  --scrollbar-thumb-hover: #3f3f46;
 
-  --selection: rgb(99 102 241 / 0.35);
+  --selection: rgb(255 255 255 / 0.16);
 }
 
 :root[data-theme='light'] {
@@ -110,13 +114,15 @@
   --fg-subtle: #8a92b3;
   --fg-disabled: #b3b9d1;
 
-  --accent: #5b5ef0;
-  --accent-hover: #4a4cd9;
-  --accent-fg: #4338ca;
-  --accent-soft: rgb(91 94 240 / 0.1);
-  --accent-border: rgb(91 94 240 / 0.35);
-  --accent-2: #7c3aed;
-  --accent-2-soft: rgb(124 58 237 / 0.1);
+  --accent: #18181b;
+  --accent-hover: #27272a;
+  --accent-fg: #18181b;
+  --accent-soft: rgb(24 24 27 / 0.06);
+  --accent-border: rgb(24 24 27 / 0.16);
+  --accent-2: #52525b;
+  --accent-2-soft: rgb(82 82 91 / 0.1);
+  --fg-on-accent: #fafafa;
+  --border-highlight: rgb(255 255 255 / 0.8);
 
   --success: #059669;
   --success-fg: #047857;
@@ -126,24 +132,24 @@
   --warning-fg: #b45309;
   --warning-soft: rgb(245 158 11 / 0.12);
   --warning-border: rgb(245 158 11 / 0.4);
-  --danger: #dc2626;
-  --danger-fg: #b91c1c;
-  --danger-soft: rgb(239 68 68 / 0.08);
-  --danger-border: rgb(239 68 68 / 0.35);
-  --info: #0284c7;
-  --info-fg: #0369a1;
-  --info-soft: rgb(14 165 233 / 0.1);
-  --info-border: rgb(14 165 233 / 0.35);
+  --danger: #e11d48;
+  --danger-fg: #be123c;
+  --danger-soft: rgb(244 63 94 / 0.08);
+  --danger-border: rgb(244 63 94 / 0.35);
+  --info: #71717a;
+  --info-fg: #3f3f46;
+  --info-soft: rgb(24 24 27 / 0.05);
+  --info-border: rgb(24 24 27 / 0.14);
   --neutral-dot: #8a92b3;
 
-  --focus-ring: rgb(91 94 240 / 0.55);
+  --focus-ring: rgb(24 24 27 / 0.45);
 
-  --chart-1: #5a5fd6;
-  --chart-2: #0d9488;
-  --chart-3: #d93d42;
+  --chart-1: #3f3f46;
+  --chart-2: #059669;
+  --chart-3: #e11d48;
   --chart-grid: #e9ecf4;
   --chart-axis: #8a92b3;
-  --chart-cursor: rgb(91 94 240 / 0.08);
+  --chart-cursor: rgb(24 24 27 / 0.05);
 
   --shadow-sm: 0 1px 2px rgb(20 26 51 / 0.06);
   --shadow-md: 0 4px 12px rgb(20 26 51 / 0.08), 0 1px 2px rgb(20 26 51 / 0.06);
@@ -151,7 +157,7 @@
 
   --scrollbar-thumb: #cfd4e6;
   --scrollbar-thumb-hover: #b5bcd6;
-  --selection: rgb(91 94 240 / 0.2);
+  --selection: rgb(24 24 27 / 0.14);
 }
 
 /* Tailwind aliases: bg-surface-1, text-fg-muted, border-border, ring-focus … */
@@ -167,6 +173,7 @@
   --color-border: var(--border);
   --color-border-subtle: var(--border-subtle);
   --color-border-strong: var(--border-strong);
+  --color-border-highlight: var(--border-highlight);
   --color-fg: var(--fg);
   --color-fg-muted: var(--fg-muted);
   --color-fg-subtle: var(--fg-subtle);
@@ -259,6 +266,7 @@
   .surface-card {
     background: var(--surface-1);
     border: 1px solid var(--border);
+    border-top-color: var(--border-highlight);
     border-radius: var(--radius-lg);
   }
   .hairline { border-color: var(--border-subtle); }

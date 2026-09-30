@@ -10,7 +10,7 @@ export default function NotFoundPage() {
         title="Хуудас олдсонгүй"
         description="Таны хайсан хуудас байхгүй эсвэл зөөгдсөн байна. Хаягаа шалгаад дахин оролдоно уу."
         action={
-          <Link to="/" className="inline-flex h-8 items-center rounded-[var(--radius-sm)] bg-[var(--accent)] px-3 text-[13px] font-medium text-white hover:bg-[var(--accent-hover)]">
+          <Link to="/" className="inline-flex h-8 items-center rounded-[var(--radius-sm)] bg-[var(--accent)] px-3 text-[13px] font-medium text-[var(--fg-on-accent)] hover:bg-[var(--accent-hover)]">
             Хяналтын самбар руу буцах
           </Link>
         }

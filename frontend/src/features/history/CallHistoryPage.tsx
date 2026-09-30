@@ -160,7 +160,7 @@ export function CallHistoryPage() {
                   <TD>
                     {c.direction === 'inbound'
                       ? <ArrowDownLeft className="h-4 w-4 text-emerald-400" aria-label="Ирсэн" />
-                      : <ArrowUpRight className="h-4 w-4 text-sky-400" aria-label="Гарсан" />}
+                      : <ArrowUpRight className="h-4 w-4 text-zinc-400" aria-label="Гарсан" />}
                   </TD>
                   <TD className="whitespace-nowrap tabular-nums">{fmtPhone(c.fromNumber)}</TD>
                   <TD className="whitespace-nowrap tabular-nums">{fmtPhone(c.toNumber)}</TD>
