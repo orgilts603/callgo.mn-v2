@@ -105,6 +105,28 @@ class LLMConfig(CamelModel):
     fallback_id: UUID | None = None
 
 
+KnowledgeMode = Literal["off", "tool", "context"]
+
+
+class KnowledgeInfo(CamelModel):
+    """Bootstrap ``knowledge`` block: which base the profile uses and how."""
+
+    id: UUID
+    name: str
+    mode: KnowledgeMode = "off"
+    context_text: str = ""
+    truncated: bool = False
+
+
+class KnowledgeHit(CamelModel):
+    chunk_id: UUID
+    document_id: UUID
+    filename: str = ""
+    heading: str = ""
+    content: str
+    score: float = 0.0
+
+
 class AgentProfile(CamelModel):
     id: UUID
     org_id: UUID
@@ -120,6 +142,8 @@ class AgentProfile(CamelModel):
     max_duration_sec: int = 600
     tools: list[str] = Field(default_factory=list)
     transfer_number: str = ""
+    knowledge_base_id: UUID | None = None
+    knowledge_mode: KnowledgeMode = "off"
 
 
 class SIPNumber(CamelModel):
@@ -218,6 +242,7 @@ class Bootstrap(CamelModel):
     lexicon: list[LexiconEntry] = Field(default_factory=list)
     contact: Contact | None = None
     campaign: CampaignInfo | None = None
+    knowledge: KnowledgeInfo | None = None
 
 
 # ---- live events ------------------------------------------------------------

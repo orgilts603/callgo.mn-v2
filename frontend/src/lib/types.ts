@@ -17,8 +17,24 @@ export interface LLMCatalogEntry { provider: LLMProvider; label: string; models:
 export interface AgentProfile {
   id: UUID; orgId: UUID; name: string; systemPrompt: string; greeting: string; language: string
   llmConfigId?: UUID | null; sttProvider: string; sttModel: string; ttsProvider: string; ttsVoice: string
-  maxDurationSec: number; tools: string[]; transferNumber?: string; createdAt: ISODate; updatedAt: ISODate
+  maxDurationSec: number; tools: string[]; transferNumber?: string
+  knowledgeBaseId?: UUID | null; knowledgeMode: KnowledgeMode
+  createdAt: ISODate; updatedAt: ISODate
 }
+export type KnowledgeMode = 'off' | 'tool' | 'context'
+export interface KnowledgeBase {
+  id: UUID; orgId: UUID; name: string; description: string; embeddingLlmConfigId?: UUID | null; embeddingModel: string
+  embeddingDims: number; chunkSize: number; chunkOverlap: number; documentCount: number; chunkCount: number
+  createdAt: ISODate; updatedAt: ISODate
+}
+export type DocumentStatus = 'processing' | 'ready' | 'failed'
+export interface KnowledgeDocument {
+  id: UUID; knowledgeBaseId: UUID; orgId: UUID; filename: string; mimeType: string; sizeBytes: number
+  status: DocumentStatus; error?: string; chunkCount: number; charCount: number; createdAt: ISODate; updatedAt: ISODate
+}
+export interface KnowledgeChunkPreview { id: UUID; seq: number; heading?: string; content: string }
+export interface KnowledgeHit { chunkId: UUID; documentId: UUID; filename: string; heading?: string; content: string; score: number }
+export interface KnowledgeSearchResponse { hits: KnowledgeHit[]; latencyMs: number; mode: 'hybrid' | 'text' }
 
 export interface SIPNumber {
   id: UUID; orgId: UUID; number: string; label: string; inboundTrunkId?: string; outboundTrunkId?: string

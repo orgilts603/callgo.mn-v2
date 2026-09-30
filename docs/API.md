@@ -137,3 +137,32 @@ All under `/internal/agent/*`, protected by header `X-Agent-Token: $CALLGO_AGENT
 ### Agent bootstrap (internal) additions
 - `campaign` gains `outcomes: [{code, label, description, terminal}]` and `schedule` is NOT sent (engine-side only).
 - `call.ended` payload may carry `outcome` (one of the codes, or "") and `outcomeNote`.
+
+## Knowledge base / RAG
+
+### Agent profile fields
+- `knowledgeBaseId` (uuid|null), `knowledgeMode`: `off` | `tool` | `context`.
+  - `tool`: the agent gets a `lookup_knowledge(question)` function tool; it searches the base and answers from the passages (or says it does not know / offers transfer).
+  - `context`: the whole base (≤ 60 000 chars) is appended to the system prompt under "# Мэдлэгийн сан"; best for small manuals, cheap with provider context caching.
+
+### Knowledge bases
+- `GET /api/knowledge-bases` → `{items: KnowledgeBase[]}`.
+- `POST /api/knowledge-bases` `{name, description?, embeddingLlmConfigId?, embeddingModel?, chunkSize?, chunkOverlap?}` → `{knowledgeBase}` (201). When `embeddingLlmConfigId` is empty the org's default LLM config is used; `embeddingModel` defaults per provider (openai `text-embedding-3-small`, google `text-embedding-004`, ollama `nomic-embed-text`, openai_compatible required).
+- `PUT /api/knowledge-bases/{id}` same body (embedding settings are locked once `chunkCount > 0`; 409 otherwise) → `{knowledgeBase}`.
+- `DELETE /api/knowledge-bases/{id}` → 204 (cascades). 409 if an agent profile still references it? No: profiles are unlinked (ON DELETE SET NULL).
+- `GET /api/knowledge-bases/{id}` → `{knowledgeBase, documents: KnowledgeDocument[]}`.
+
+### Documents
+- `POST /api/knowledge-bases/{id}/documents` multipart `file` (pdf, docx, txt, md, csv; ≤ 20 MB) **or** JSON `{filename, text}` (pasted text) → `{document}` (202; status `processing`). Ingestion runs in the background: extract text → chunk → embed → store; status becomes `ready` or `failed` with `error`.
+- `GET /api/knowledge-bases/{id}/documents` → `{items}`; `GET /api/knowledge-documents/{docId}` → `{document, chunks: [{id, seq, heading, content}]}` (first 50 chunks, `?offset=`).
+- `DELETE /api/knowledge-documents/{docId}` → 204.
+- `POST /api/knowledge-documents/{docId}/reprocess` → 202.
+
+### Search (admin test panel)
+- `POST /api/knowledge-bases/{id}/search` `{query, k?: 5}` → `{hits: KnowledgeHit[], latencyMs, mode: "hybrid"|"text"}` (`text` when the base has no embeddings yet / embedder unavailable).
+
+### Internal (agent)
+- `POST /internal/agent/knowledge/search` `{knowledgeBaseId, query, k?: 5}` → `{hits: KnowledgeHit[]}`.
+- Bootstrap gains `knowledge: {id, name, mode, contextText?: string}|null` (`contextText` only in `context` mode, ≤ 60 000 chars, with a `truncated: true` flag when cut).
+
+Hybrid search = RRF fusion of pgvector cosine top-20 and `to_tsvector('simple')` top-20, returning k. Scores are normalised to [0,1].

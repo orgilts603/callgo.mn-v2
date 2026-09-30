@@ -110,10 +110,16 @@ type AgentProfile struct {
 	TTSVoice       string     `json:"ttsVoice"`
 	MaxDurationSec int        `json:"maxDurationSec"`
 	// Tools the LLM may call: "end_call", "transfer_call", "lookup_contact", "schedule_callback".
-	Tools          []string  `json:"tools"`
-	TransferNumber string    `json:"transferNumber,omitempty"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	Tools          []string `json:"tools"`
+	TransferNumber string   `json:"transferNumber,omitempty"`
+	// KnowledgeBaseID attaches an org knowledge base (RAG). KnowledgeMode:
+	// "off" (default), "tool" (LLM calls lookup_knowledge on demand) or
+	// "context" (the whole base is inlined into the system prompt; suits
+	// small manuals and benefits from provider context caching).
+	KnowledgeBaseID *uuid.UUID    `json:"knowledgeBaseId,omitempty"`
+	KnowledgeMode   KnowledgeMode `json:"knowledgeMode"`
+	CreatedAt       time.Time     `json:"createdAt"`
+	UpdatedAt       time.Time     `json:"updatedAt"`
 }
 
 // SIPNumber is a DID / extension owned by an organisation. Inbound calls to
@@ -347,6 +353,117 @@ type CampaignTarget struct {
 	LastError   string     `json:"lastError,omitempty"`
 	NextTryAt   *time.Time `json:"nextTryAt,omitempty"`
 	UpdatedAt   time.Time  `json:"updatedAt"`
+}
+
+// ===========================================================================
+// Knowledge base (RAG)
+// ===========================================================================
+
+// KnowledgeMode says how an agent profile uses its knowledge base.
+type KnowledgeMode string
+
+const (
+	KnowledgeOff     KnowledgeMode = "off"
+	KnowledgeTool    KnowledgeMode = "tool"
+	KnowledgeContext KnowledgeMode = "context"
+)
+
+// KnowledgeBase groups documents an AI agent may answer from.
+type KnowledgeBase struct {
+	ID          uuid.UUID `json:"id"`
+	OrgID       uuid.UUID `json:"orgId"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	// EmbeddingLLMConfigID supplies provider + API key for embeddings
+	// (openai → text-embedding-3-small, google → text-embedding-004,
+	// ollama/openai_compatible → EmbeddingModel at that base URL).
+	EmbeddingLLMConfigID *uuid.UUID `json:"embeddingLlmConfigId,omitempty"`
+	EmbeddingModel       string     `json:"embeddingModel"`
+	EmbeddingDims        int        `json:"embeddingDims"` // fixed once the first chunk is stored
+	ChunkSize            int        `json:"chunkSize"`     // characters, default 1200
+	ChunkOverlap         int        `json:"chunkOverlap"`  // characters, default 200
+	DocumentCount        int        `json:"documentCount"`
+	ChunkCount           int        `json:"chunkCount"`
+	CreatedAt            time.Time  `json:"createdAt"`
+	UpdatedAt            time.Time  `json:"updatedAt"`
+}
+
+// DocumentStatus is the ingestion state of a knowledge document.
+type DocumentStatus string
+
+const (
+	DocumentProcessing DocumentStatus = "processing"
+	DocumentReady      DocumentStatus = "ready"
+	DocumentFailed     DocumentStatus = "failed"
+)
+
+// KnowledgeDocument is one uploaded file (pdf, docx, txt, md, csv) or pasted text.
+type KnowledgeDocument struct {
+	ID              uuid.UUID      `json:"id"`
+	KnowledgeBaseID uuid.UUID      `json:"knowledgeBaseId"`
+	OrgID           uuid.UUID      `json:"orgId"`
+	Filename        string         `json:"filename"`
+	MimeType        string         `json:"mimeType"`
+	SizeBytes       int64          `json:"sizeBytes"`
+	Status          DocumentStatus `json:"status"`
+	Error           string         `json:"error,omitempty"`
+	ChunkCount      int            `json:"chunkCount"`
+	CharCount       int            `json:"charCount"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
+}
+
+// KnowledgeChunk is one embedded passage.
+type KnowledgeChunk struct {
+	ID              uuid.UUID `json:"id"`
+	DocumentID      uuid.UUID `json:"documentId"`
+	KnowledgeBaseID uuid.UUID `json:"knowledgeBaseId"`
+	Seq             int       `json:"seq"`
+	Content         string    `json:"content"`
+	Heading         string    `json:"heading,omitempty"` // nearest heading / section title
+	Embedding       []float32 `json:"-"`
+}
+
+// KnowledgeHit is one search result.
+type KnowledgeHit struct {
+	ChunkID    uuid.UUID `json:"chunkId"`
+	DocumentID uuid.UUID `json:"documentId"`
+	Filename   string    `json:"filename"`
+	Heading    string    `json:"heading,omitempty"`
+	Content    string    `json:"content"`
+	Score      float32   `json:"score"` // fused hybrid score in [0,1]
+}
+
+// KnowledgeRepository persists bases, documents and chunks (pgvector).
+type KnowledgeRepository interface {
+	CreateKnowledgeBase(ctx context.Context, kb *KnowledgeBase) error
+	UpdateKnowledgeBase(ctx context.Context, kb *KnowledgeBase) error
+	DeleteKnowledgeBase(ctx context.Context, id uuid.UUID) error
+	GetKnowledgeBase(ctx context.Context, id uuid.UUID) (*KnowledgeBase, error)
+	ListKnowledgeBases(ctx context.Context, orgID uuid.UUID) ([]KnowledgeBase, error)
+
+	CreateDocument(ctx context.Context, d *KnowledgeDocument) error
+	UpdateDocument(ctx context.Context, d *KnowledgeDocument) error
+	DeleteDocument(ctx context.Context, id uuid.UUID) error
+	GetDocument(ctx context.Context, id uuid.UUID) (*KnowledgeDocument, error)
+	ListDocuments(ctx context.Context, kbID uuid.UUID) ([]KnowledgeDocument, error)
+
+	// ReplaceChunks deletes the document's chunks and inserts the given ones.
+	ReplaceChunks(ctx context.Context, docID uuid.UUID, chunks []KnowledgeChunk) error
+	// SearchVector returns the k nearest chunks by cosine distance.
+	SearchVector(ctx context.Context, kbID uuid.UUID, embedding []float32, k int) ([]KnowledgeHit, error)
+	// SearchText returns the k best full-text (tsvector) matches.
+	SearchText(ctx context.Context, kbID uuid.UUID, query string, k int) ([]KnowledgeHit, error)
+	// AllChunksText returns every chunk's content in document/seq order,
+	// capped at maxChars (for KnowledgeContext mode).
+	AllChunksText(ctx context.Context, kbID uuid.UUID, maxChars int) (string, bool, error)
+}
+
+// Embedder turns texts into vectors (driven port; provider behind it).
+type Embedder interface {
+	Embed(ctx context.Context, texts []string) ([][]float32, error)
+	Dims() int
+	Model() string
 }
 
 // DoNotCallEntry is a phone number the organisation must never dial.
