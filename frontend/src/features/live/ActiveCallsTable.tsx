@@ -7,7 +7,8 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Bot, Headset, PanelRightOpen, PhoneOff
 import { AgentStateBadge, Button, CallStatusBadge, TBody, TD, TH, THead, TR, Table } from '@/components/ui'
 import { cn, fmtAgo, fmtDateTime, fmtPhone } from '@/lib/utils'
 import type { CallStatus, Speaker } from '@/lib/types'
-import { CallDuration, DIRECTION_LABEL, DirectionIcon } from '@/features/calls/callFormat'
+import { CallDuration, DirectionIcon } from '@/features/calls/callFormat'
+import { DIRECTION_LABEL } from '@/features/calls/callLabels'
 import type { CallRow } from './types'
 import { useTicker } from './useTicker'
 
@@ -46,7 +47,7 @@ function ActionsCell({ row }: { row: CallRow }) {
 const features = tableFeatures({ rowSortingFeature, sortedRowModel: createSortedRowModel() })
 const helper = createColumnHelper<typeof features, CallRow>()
 
-export const columns = helper.columns([
+const columns = helper.columns([
   helper.accessor((r) => STATUS_ORDER[r.call.status], {
     id: 'status', header: 'Төлөв', sortFn: sortFn_basic,
     cell: ({ row }) => <CallStatusBadge status={row.original.call.status} />,

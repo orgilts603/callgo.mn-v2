@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQueries, useQuery, type UseQueryResult } from '@tanstack/react-query'
 import { useLive } from '@/lib/ws'
 import type { Call } from '@/lib/types'
@@ -65,7 +65,7 @@ export function useActiveCallRows(meta: Record<string, CallLiveMeta>, endedIds: 
   })
 
   // Reuse row objects whose inputs did not change so memoized table rows skip rendering.
-  const cache = useRef(new Map<string, CallRow>())
+  const [cache] = useState(() => ({ rows: new Map<string, CallRow>() }))
   const rows = useMemo(() => {
     const next = new Map<string, CallRow>()
     const out: CallRow[] = []
@@ -79,14 +79,14 @@ export function useActiveCallRows(meta: Record<string, CallLiveMeta>, endedIds: 
         agentState: m?.agentState ?? null,
         snippet: m?.snippet ?? null,
       }
-      const prev = cache.current.get(call.id)
+      const prev = cache.rows.get(call.id)
       const row = prev && sameRow(prev, candidate) ? prev : candidate
       next.set(call.id, row)
       out.push(row)
     }
-    cache.current = next
+    cache.rows = next
     return out
-  }, [calls, meta, contactNames, campaignNames])
+  }, [calls, meta, contactNames, campaignNames, cache])
 
   return { rows, isLoading: activeQ.isLoading && calls.length === 0, error: activeQ.error }
 }

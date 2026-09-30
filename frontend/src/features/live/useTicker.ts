@@ -39,7 +39,15 @@ function getClock(intervalMs: number): Clock {
         }
       }
     },
-    getSnapshot: () => c.now,
+    // While no timer runs the value may be stale; refresh it at most once per period
+    // (stable between consecutive reads, as useSyncExternalStore requires).
+    getSnapshot: () => {
+      if (!c.timer) {
+        const t = Date.now()
+        if (t - c.now >= intervalMs) c.now = t
+      }
+      return c.now
+    },
   }
   clock = c
   clocks.set(intervalMs, clock)
@@ -49,7 +57,5 @@ function getClock(intervalMs: number): Clock {
 /** Returns `Date.now()` refreshed every `intervalMs` (shared interval per period). */
 export function useTicker(intervalMs = 1000): number {
   const clock = getClock(Math.max(16, Math.floor(intervalMs)))
-  // An idle clock may be stale; refresh it before the first subscriber reads it.
-  if (clock.listeners.size === 0 && Date.now() - clock.now >= intervalMs) clock.now = Date.now()
   return useSyncExternalStore(clock.subscribe, clock.getSnapshot, clock.getSnapshot)
 }

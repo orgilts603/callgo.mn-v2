@@ -5,7 +5,7 @@ import type { LexiconScope, TranscriptTurn } from '@/lib/types'
 import { buildCorrectionBody, wordAt } from './transcriptText'
 import { useTurnPatch } from './useTurnPatch'
 
-export const SCOPE_OPTIONS: SelectOption[] = [
+const SCOPE_OPTIONS: SelectOption[] = [
   { value: 'stt', label: 'STT — яриа таних' },
   { value: 'tts', label: 'TTS — дуудлага' },
   { value: 'both', label: 'Хоёулаа' },

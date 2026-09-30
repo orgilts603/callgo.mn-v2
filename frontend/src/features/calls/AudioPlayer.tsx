@@ -19,7 +19,7 @@ export interface AudioPlayerProps {
   className?: string
 }
 
-export const PLAYBACK_RATES = [1, 1.5, 2] as const
+const PLAYBACK_RATES = [1, 1.5, 2] as const
 
 function cssVar(name: string, fallback: string): string {
   if (typeof window === 'undefined') return fallback

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Sparkles } from 'lucide-react'
 import { Card, SentimentBadge } from '@/components/ui'
 import type { Call } from '@/lib/types'
-import { END_REASON_LABEL } from './callFormat'
+import { END_REASON_LABEL } from './callLabels'
 import { isLiveStatus } from './api'
 
 function Item({ label, children }: { label: string; children: ReactNode }) {

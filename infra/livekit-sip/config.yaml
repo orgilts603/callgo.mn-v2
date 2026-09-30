@@ -1,0 +1,57 @@
+# =============================================================================
+# CallGo.mn — livekit-sip (SIP <-> WebRTC bridge) configuration
+# LiveKit SIP гүүрний тохиргоо
+#
+# Reference: third_party/sip/pkg/config/config.go, third_party/sip/README.md
+#
+# api_key / api_secret / ws_url are NOT set here on purpose: livekit-sip reads
+# LIVEKIT_API_KEY, LIVEKIT_API_SECRET and LIVEKIT_WS_URL from the environment
+# (docker compose passes them from .env), so secrets live only in .env.
+# (Нууц түлхүүрүүд зөвхөн .env файлд байна.)
+#
+# Topology used by infra/docker-compose.yml:
+#   Carrier ──SIP/RTP──▶ Asterisk (172.28.0.10, public :5060, RTP 10000-10200)
+#                         └──SIP/RTP (Docker network)──▶ livekit-sip (172.28.0.11:5060)
+# livekit-sip only ever talks to Asterisk over the private Docker network, so
+# it neither needs host networking nor a public IP, and it does not fight
+# with Asterisk for the host's port 5060.
+#
+# If you ever connect a carrier DIRECTLY to livekit-sip (no Asterisk):
+#   * run the service with `network_mode: host` (LiveKit's recommendation;
+#     large UDP ranges are painful to publish through Docker),
+#   * set `use_external_ip: true` so SIP Contact / SDP carry the public IP,
+#   * open sip_port and rtp_port on the firewall, and point ws_url/redis at
+#     localhost-published ports.
+# =============================================================================
+
+# Must be the same Redis livekit-server uses (psrpc bus + SIP session state).
+redis:
+  address: redis:6379
+
+# SIP signalling port (UDP + TCP) inside the container. Asterisk's `livekit`
+# PJSIP endpoint points here (infra/asterisk/pjsip.conf).
+sip_port: 5060
+
+# RTP media ports towards Asterisk. Private to the container network, so it
+# can overlap the range Asterisk publishes on the host without conflict.
+rtp_port: 10000-10200
+
+# Advertise the container's own (Docker network) IP in SIP Contact and SDP;
+# Asterisk reaches it directly. See the header for the direct-carrier case.
+use_external_ip: false
+
+# Drop INVITEs that fail trunk auth / dispatch silently instead of replying,
+# which hides the endpoint from scanners. Only Asterisk can reach it anyway.
+hide_inbound_port: false
+
+# Hang up when no RTP arrives for this long (dead carrier leg, NAT timeout).
+media_timeout: 30s
+media_timeout_initial: 60s
+
+# HTTP health endpoint (compose healthcheck probes this port) and metrics.
+health_port: 8081
+prometheus_port: 6791
+
+logging:
+  # debug shows every SIP message (useful with `docker compose logs -f livekit-sip`).
+  level: info

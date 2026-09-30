@@ -9,7 +9,7 @@ import type {
   AgentStatePayload, CallEventPayload, CampaignProgressPayload, EventType, LexiconUpdatedPayload, LiveEvent, SystemPayload,
   TranscriptFinalPayload,
 } from '@/lib/types'
-import { END_REASON_LABEL } from '@/features/calls/callFormat'
+import { END_REASON_LABEL } from '@/features/calls/callLabels'
 import { eventCallId } from '@/features/calls/eventUtils'
 
 const ICONS: Partial<Record<EventType, typeof Activity>> = {
