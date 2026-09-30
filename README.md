@@ -73,6 +73,7 @@ deployment live in `docs/`:
 | `docs/API.md` | Every REST / WebSocket / internal endpoint (frozen contract) |
 | `docs/EVENTS.md` | Live event envelope and payloads |
 | `docs/API.md` → "Campaign v2" and "Knowledge base / RAG" | Excel campaigns with schedules/outcomes/dry-run/do-not-call; pgvector knowledge bases with `tool` / `context` modes |
+| `docs/ROADMAP_SAAS.md` + `docs/API.md` SaaS sections | Multi-tenant signup / invitations / API keys / audit, plans + subscriptions + usage metering + QPay invoices, recordings, operator handoff, webhooks / SMS / post-call actions, inbound routing + callbacks, analytics, platform admin |
 | `docs/DEPLOY.md`, `docs/ASTERISK.md`, `docs/SIP_FLOW.md` | Production deployment, carrier trunk setup, SIP sequence diagrams |
 
 ### Run locally (no SIP trunk needed)
@@ -90,9 +91,11 @@ cd agent && uv venv && uv pip install -e ".[dev]" && python -m callgo_agent.main
 ### Tests
 
 ```bash
-cd backend  && go test ./...                 # Go: 18 packages incl. Postgres+pgvector integration (CALLGO_TEST_DATABASE_URL)
-cd frontend && pnpm exec vitest run          # React: 132 tests
-cd agent    && .venv/bin/pytest              # Python: 600 tests
+make ci                                      # what CI runs: go vet + go test -race, tsc + vitest, ruff + pytest
+cd backend  && go test ./...                 # Go: 30+ packages incl. Postgres+pgvector integration (CALLGO_TEST_DATABASE_URL)
+cd frontend && pnpm exec vitest run          # React: 270+ tests
+cd agent    && .venv/bin/pytest              # Python: 700+ tests
+make e2e                                     # Playwright smoke against a running stack (E2E_BASE_URL)
 ```
 
 ### Layout

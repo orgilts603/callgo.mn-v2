@@ -1,0 +1,16 @@
+{
+  "name": "callgo-e2e",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Playwright smoke tests for the CallGo.mn dashboard (isolated from the frontend package).",
+  "type": "module",
+  "scripts": {
+    "test": "playwright test -c ../playwright.config.ts",
+    "install-browsers": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.6.0"
+  }
+}

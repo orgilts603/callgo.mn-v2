@@ -9,9 +9,9 @@ import type { Organization, User } from '@/lib/types'
 import { useAuth } from './auth'
 
 export const testUser: User = {
-  id: 'u1', orgId: 'o1', email: 'admin@callgo.mn', name: 'Бат Болд', role: 'admin', createdAt: '2026-01-01T00:00:00Z',
+  id: 'u1', orgId: 'o1', email: 'admin@callgo.mn', name: 'Бат Болд', role: 'admin', createdAt: '2026-01-01T00:00:00Z', status: 'active', isPlatformAdmin: false, updatedAt: '2026-01-01T00:00:00Z',
 }
-export const testOrg: Organization = { id: 'o1', name: 'CallGo Demo', slug: 'demo', createdAt: '2026-01-01T00:00:00Z' }
+export const testOrg: Organization = { id: 'o1', name: 'CallGo Demo', slug: 'demo', createdAt: '2026-01-01T00:00:00Z', planCode: 'trial', status: 'active', timezone: 'Asia/Ulaanbaatar', updatedAt: '2026-01-01T00:00:00Z' }
 
 export function makeQueryClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity }, mutations: { retry: false } } })
@@ -32,7 +32,7 @@ export function signIn(token = 'test-token') {
 
 export function resetAuth() {
   localStorage.clear()
-  useAuth.setState({ token: null, user: null, org: null, status: 'idle' })
+  useAuth.setState({ token: null, user: null, org: null, subscription: null, status: 'idle' })
 }
 
 export function renderRoutes(routes: RouteObject[], { path = '/', client = makeQueryClient() }: { path?: string; client?: QueryClient } = {}) {

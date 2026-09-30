@@ -166,3 +166,81 @@ All under `/internal/agent/*`, protected by header `X-Agent-Token: $CALLGO_AGENT
 - Bootstrap gains `knowledge: {id, name, mode, contextText?: string}|null` (`contextText` only in `context` mode, ≤ 60 000 chars, with a `truncated: true` flag when cut).
 
 Hybrid search = RRF fusion of pgvector cosine top-20 and `to_tsvector('simple')` top-20, returning k. Scores are normalised to [0,1].
+
+# SaaS API contract (identity, billing, recordings, handoff, integrations, routing, analytics, admin)
+
+Conventions unchanged (JSON, `{items,total}`, error envelope). New auth methods:
+- **Refresh tokens**: `POST /api/auth/login` now returns `{token, refreshToken, user, org, subscription}`; access JWT TTL 15 min, refresh 30 days (rotated on every use). `POST /api/auth/refresh` `{refreshToken}` → `{token, refreshToken}`; `POST /api/auth/logout` `{refreshToken}` → 204. Old 24h tokens keep working until expiry.
+- **API keys**: header `Authorization: Bearer cg_live_…` authenticates as the org (role = admin, scopes enforced). `Claims.APIKeyID` set.
+- **Roles**: owner > admin > operator. Platform staff (`user.isPlatformAdmin`) may call `/api/admin/*`.
+- **Suspended org** (`org.status = suspended`): every route except auth, billing and `GET` reads returns 402 `{"error":{"code":"payment_required"}}`.
+- New error codes: `payment_required` (402), `quota_exceeded` (429 with `{"error":{"code":"quota_exceeded","message":..., "details":{"limit":..,"used":..}}}`), `feature_unavailable` (403).
+
+## Identity
+- `POST /api/auth/signup` `{orgName, email, password, name, phone?}` → 201 `{token, refreshToken, user, org, subscription}`. Creates org (slug from name, unique), owner user (status active, emailVerifiedAt null), trial subscription (plan `trial`, 14 days), sends verification email. Rate limited 5/min/IP. Disabled when `CALLGO_ALLOW_SIGNUP=false` (403).
+- `POST /api/auth/verify-email` `{token}` → `{user}`. `POST /api/auth/resend-verification` → 204.
+- `POST /api/auth/forgot-password` `{email}` → 204 always (no enumeration). Email contains `https://<app>/reset-password?token=…` (token valid 1h, single use).
+- `POST /api/auth/reset-password` `{token, password}` → 204 (revokes all sessions).
+- `POST /api/auth/change-password` `{currentPassword, newPassword}` → 204.
+- `GET /api/auth/sessions` → `{items: RefreshSession[]}`; `DELETE /api/auth/sessions/{id}` → 204.
+- Members (owner/admin): `GET /api/org/members` → `{items: User[], invitations: Invitation[]}`; `POST /api/org/invitations` `{email, role}` → 201 `{invitation}` (email with accept link; 409 if member exists; 429 quota_exceeded when plan MaxUsers reached); `DELETE /api/org/invitations/{id}` → 204; `POST /api/auth/accept-invitation` `{token, name, password}` → `{token, refreshToken, user, org}` (public); `PUT /api/org/members/{userId}` `{role?, status?}` → `{user}` (cannot demote/disable the last owner or yourself); `DELETE /api/org/members/{userId}` → 204.
+- Org: `GET /api/org` → `{org, subscription, plan}`; `PUT /api/org` `{name?, timezone?, settings?}` → `{org}` (owner/admin).
+- API keys (owner/admin, feature `api`): `GET /api/org/api-keys` → `{items: APIKey[]}`; `POST /api/org/api-keys` `{name, scopes[]}` → 201 `{apiKey, plaintext}` (plaintext shown once); `DELETE /api/org/api-keys/{id}` → 204.
+- Audit (owner/admin): `GET /api/org/audit?actorId=&action=&from=&to=&limit=&offset=` → `{items: AuditEntry[], total}`. Every mutating handler appends an entry (action `<resource>.<verb>`).
+
+## Billing
+- `GET /api/billing/plans` → `{items: Plan[]}` (public plans; no auth needed).
+- `GET /api/billing/subscription` → `{subscription, plan, usage: UsageSummary, limits: Plan}`.
+- `POST /api/billing/subscription` `{planCode}` → `{subscription, invoice?}` — switching to a paid plan creates an `open` invoice for the first period (prorated not required; full month); plan becomes effective when paid (status `past_due` until then if upgrading from trial with expired trial; `active` immediately when downgrading/paid).
+- `POST /api/billing/subscription/cancel` → `{subscription}` (cancels at period end).
+- `GET /api/billing/usage?from=&to=` → `{summary: UsageSummary, daily: [{day, minutes, calls, costMnt}]}`.
+- `GET /api/billing/invoices` → `{items: Invoice[]}`; `GET /api/billing/invoices/{id}` → `{invoice, payments: Payment[]}`; `GET /api/billing/invoices/{id}/pdf` → a print-ready HTML invoice (`text/html`, Mongolian labels; the browser's print dialog produces the PDF).
+- `POST /api/billing/invoices/{id}/pay` `{provider: "qpay"|"mock"}` → 201 `{payment}` with `qrText`, `qrImage`, `deepLinks`, `expiresAt`.
+- `GET /api/billing/payments/{id}` → `{payment}` (UI polls every 3 s until paid/expired; also calls provider Check when pending and > 10 s old).
+- `POST /api/billing/webhooks/qpay?payment_id=<uuid>` (public, provider callback) → 200 `SUCCESS`; verifies via provider Check, marks payment + invoice paid, activates subscription, audit entry.
+- Enforcement: `POST /api/calls/dial`, campaign start and the dialer engine consult `Entitlements.CanStartCall` → 429 `quota_exceeded` / 402 `payment_required`. Agent profiles / SIP numbers / users / KB uploads check plan caps → 429 `quota_exceeded`. Feature-gated routes (`recordings`, `webhooks`, `sms`, `api`, `analytics`, `handoff`) → 403 `feature_unavailable`.
+- Monthly job: on period end create invoice (plan fee + overage lines + VAT 10%), start next period; unpaid 7 days after due → org `suspended`; payment → `active`.
+
+## Recordings
+- Recording starts automatically on `call.answered` when the org has feature `recordings` and profile/org setting `recordCalls` (org.settings.recordCalls default true). Backend starts LiveKit room-composite audio egress (`audio_only`, OGG/MP4) to the object store (S3/MinIO; `local` driver for dev writes under `CALLGO_RECORDINGS_DIR`).
+- `Call.recording` is filled from `egress_ended`; `Call.recordingUrl` = `/api/calls/{id}/recording`.
+- `GET /api/calls/{id}/recording` → 302 to a signed URL (TTL 10 min) or 404. `GET /api/calls/{id}/recording/url` → `{url, expiresAt}` (for the player). `DELETE /api/calls/{id}/recording` → 204 (owner/admin).
+- Retention: `org.settings.recordingRetentionDays` (default 90); nightly job deletes older objects and marks status `deleted`.
+
+## Operator handoff
+- `POST /api/calls/{id}/handoff` → `{token, url, roomName, identity}` — a LiveKit access token (identity `op-<userId>`, name = user name, attributes `callgo.role=operator`, `callgo.userId`) valid 1 h; sets `call.handoff=requested`, `operatorId`; publishes `call.updated`. Feature `handoff`; only for active calls.
+- `POST /api/calls/{id}/handoff/end` → 204 (operator left; agent resumes).
+- Agent worker: on a participant with `callgo.role=operator` joining, it says "Оператор холбогдлоо" once, stops generating replies (passive mode: STT continues, agent does not speak, `agent.state=idle`), publishes `call.updated` with `handoff=active`; when the operator leaves it resumes ("Би үргэлжлүүлье"). Operator speech is transcribed as `speaker=human` when the agent subscribes to the operator track (best effort).
+- `GET /api/livekit/config` → `{url}` (public LiveKit WS URL for the browser SDK).
+
+## Integrations
+- Webhooks (feature `webhooks`, owner/admin): `GET /api/webhooks` → `{items}`; `POST /api/webhooks` `{url, events[], description?}` → 201 `{webhook, secret}` (secret shown once); `PUT /api/webhooks/{id}` `{url?, events?, active?, description?}`; `DELETE`; `POST /api/webhooks/{id}/test` → `{delivery}` (sends `system` event); `POST /api/webhooks/{id}/rotate-secret` → `{secret}`; `GET /api/webhooks/{id}/deliveries?limit=&offset=` → `{items, total}`; `POST /api/webhook-deliveries/{id}/retry` → `{delivery}`.
+- Delivery: POST JSON `Event` with headers `X-CallGo-Event`, `X-CallGo-Delivery`, `X-CallGo-Timestamp`, `X-CallGo-Signature: sha256=<hmac(secret, timestamp + "." + body)>`; 10 s timeout; retries 1m, 5m, 30m, 2h, 12h; after 5 failures → failed; 20 consecutive failures → webhook `active=false`.
+- SMS (feature `sms`): `GET /api/sms/config` → `{provider, from, configured}`; `PUT /api/sms/config` `{provider: "mock"|"http", url?, apiKey?, from?, bodyTemplate?}` (stored in org.settings.sms, apiKey encrypted); `POST /api/sms/send` `{to, body, callId?}` → 201 `{message}` (metered `UsageSMS`); `GET /api/sms?limit=&offset=` → `{items, total}`.
+- Post-call actions: `AgentProfile.postCallActions[]` (validated: sms needs template + feature, webhook needs webhookId, callback delayMin 0..10080). Runner executes on `call.ended` (after outcome is known); SMS templates render `{{name}}`, `{{phone}}`, `{{summary}}`, `{{outcome}}`, `{{campaign}}`, `{{vars.X}}`.
+- Callbacks: `GET /api/callbacks?status=&limit=&offset=` → `{items, total}`; `POST /api/callbacks` `{phone, name?, note?, dueAt, sipNumberId?, agentProfileId?, contactId?}` → 201; `PUT /api/callbacks/{id}` `{dueAt?, note?, status?: "canceled"}`; `DELETE`. The scheduler dials due callbacks (respecting business hours of the SIP number and entitlements) as outbound calls with `metadata.callbackId`; `call.ended` marks the callback done/failed (retry once after 30 min on no_answer/busy). The agent tool `schedule_callback(when, note)` now creates a CallbackRequest through the events ingest (`call.ended` payload `callbacks: [{dueAt, note}]`).
+
+## Inbound routing
+- `SIPNumber.routing: RoutingConfig` accepted on `POST/PUT /api/sip-numbers` (validated: menu keys unique in 0-9,*,#; profiles belong to org; timeout 3..30; repeat 0..3). `PUT /api/sip-numbers/{id}/routing` `RoutingConfig` → `{sipNumber}` (admin; same validation). `POST /api/sip-numbers/{id}/routing/resolve?at=<rfc3339>` → `{route: ResolvedRoute}` (preview).
+- Bootstrap gains `route: ResolvedRoute` (inbound only) and the resolved `profile`. For `mode=after_hours` with no profile the agent speaks `message` and hangs up (`endReason: after_hours`). For `mode=menu` the agent speaks `menuPrompt`, waits for DTMF (`MenuTimeoutSec`, repeats `MenuRepeat` times), then re-bootstraps with `?profileId=` (`GET /internal/agent/bootstrap` accepts `profileId` to override) and continues; unknown key → repeats prompt.
+
+## Analytics (feature `analytics`)
+- `GET /api/analytics/overview?from=&to=` → `{calls, answered, answerRate, avgDurationSec, totalMinutes, costMnt, costPerCallMnt, sentiment: {positive, neutral, negative}, outcomes: [{code,label,count}], byDirection: {inbound, outbound}}`.
+- `GET /api/analytics/timeseries?from=&to=&bucket=hour|day` → `{items: [{ts, calls, answered, minutes, costMnt}]}`.
+- `GET /api/analytics/heatmap?from=&to=` → `{cells: [{weekday, hour, calls, answerRate}]}` (org timezone).
+- `GET /api/analytics/profiles?from=&to=` → `{items: [{profileId, name, calls, answerRate, avgDurationSec, positiveRate, costMnt, outcomes: {...}}]}`.
+- `GET /api/analytics/campaigns?from=&to=` → `{items: [{campaignId, name, total, done, failed, skipped, outcomes: {...}, minutes, costMnt}]}`.
+- `GET /api/analytics/export.csv?from=&to=` → CSV of calls with outcome/usage columns.
+
+## Platform admin (`user.isPlatformAdmin`)
+- `GET /api/admin/orgs?q=&limit=&offset=` → `{items: [{org, subscription, usage: UsageSummary, users}]}`.
+- `GET /api/admin/orgs/{id}` → `{org, subscription, plan, usage, users, invoices}`.
+- `PUT /api/admin/orgs/{id}/subscription` `{planCode, status?, customLimits?, currentPeriodEnd?}` → `{subscription}`.
+- `PUT /api/admin/orgs/{id}` `{status}` → `{org}` (suspend/close/reactivate).
+- `POST /api/admin/invoices/{id}/mark-paid` `{note}` → `{invoice}` (bank transfer).
+- `GET /api/admin/stats` → `{orgs, activeSubscriptions, mrrMnt, callsToday, minutesToday}`.
+
+## Agent worker additions
+- Bootstrap: `org.settings.recordCalls`, `route`, `entitlements: {canStart: bool, reason}` (agent hangs up politely when false), `handoff: {enabled: bool}`.
+- `call.ended` payload gains `usage: CallUsage` and optional `callbacks: [{dueAt, note}]`; `call.updated` from the agent may carry `handoff: "active"|"ended"`.
+- `POST /internal/agent/events` accepts `agent.state` with `state: "handoff"`.

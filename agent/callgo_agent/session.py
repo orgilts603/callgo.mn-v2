@@ -11,6 +11,12 @@
 
 Knowledge base (``Bootstrap.knowledge``): ``context`` mode puts the base text in the
 instructions; ``tool`` mode adds ``lookup_knowledge`` (see :mod:`callgo_agent.knowledge`).
+
+SaaS additions: ``Bootstrap.entitlements.canStart == false`` and inbound ``after_hours``
+routes without a profile are refused with a short message (:mod:`callgo_agent.routing`);
+``menu`` routes run the IVR menu first and switch the agent with ``session.update_agent``;
+operator handoff (:mod:`callgo_agent.handoff`) makes the agent passive; usage is metered
+(:mod:`callgo_agent.usage`) and sent in ``call.ended`` together with callback intents.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from livekit import rtc
 from livekit.agents import (
+    NOT_GIVEN,
     Agent,
     AgentSession,
     AgentStateChangedEvent,
@@ -42,9 +49,11 @@ from livekit.agents import (
     ConversationItemAddedEvent,
     JobContext,
     ModelSettings,
+    NotGivenOr,
     TurnHandlingOptions,
     UserInputTranscribedEvent,
     UserStateChangedEvent,
+    UserTurnExceededEvent,
     llm,
     room_io,
     stt,
@@ -53,6 +62,7 @@ from pydantic import ValidationError
 
 from .config import settings
 from .events import EventEmitter, utcnow
+from .handoff import HandoffController, OperatorTranscriber
 from .knowledge import (
     KnowledgeRetriever,
     KnowledgeSearcher,
@@ -60,24 +70,39 @@ from .knowledge import (
     build_lookup_tool,
     knowledge_instructions,
 )
+from .routing import (
+    CallGate,
+    KeyQueue,
+    MenuFlow,
+    MenuResult,
+    SessionPromptPlayer,
+    attach_dtmf,
+    attach_spoken_keys,
+    gate_for,
+    menu_route,
+)
 from .schemas import (
     AgentProfile,
+    AgentState,
     Bootstrap,
     CallDirection,
     CallEndedPayload,
     CallStatus,
+    CallUsage,
     CampaignOutcome,
     EndReason,
     JobMetadata,
     LexiconEntry,
     LexiconScope,
     LLMConfig,
+    ResolvedRoute,
     Sentiment,
     Speaker,
     TranscriptTurn,
 )
 from .tools import (
     ALL_TOOLS,
+    TOOL_REQUEST_OPERATOR,
     TOOL_TRANSFER_CALL,
     CallbackRequest,
     CallControl,
@@ -91,6 +116,7 @@ from .tools import (
     outcome_table,
     resolve_outcome,
 )
+from .usage import UsageTracker
 
 if TYPE_CHECKING:
     from livekit.agents import tts, vad
@@ -114,6 +140,13 @@ TURN_DETECTOR_ENV = "CALLGO_TURN_DETECTOR"  # "vad" (default) | "multilingual"
 MAX_DURATION_MESSAGES = {
     "mn": "Уучлаарай, ярианы хугацаа дууслаа. Бидэнтэй холбогдсонд баярлалаа. Баяртай.",
     "en": "Sorry, we have reached the maximum call time. Thank you for calling. Goodbye.",
+}
+REFUSAL_PLAYOUT_TIMEOUT_SEC = 30.0
+MENU_INSTRUCTIONS = "You are an automated phone menu. Do not answer; the caller picks an option."
+# Summaries for calls refused before any conversation (no LLM involved).
+GATE_SUMMARIES: dict[str, str] = {
+    "after_hours": "Ажлын цагаас гадуур залгасан тул мэдээлэл өгөөд дуудлагыг дуусгасан.",
+    "quota_exceeded": "Үйлчилгээний эрх хүрэлцээгүй тул дуудлагыг хүлээн аваагүй.",
 }
 AWAY_PROMPT = (
     "The customer has been silent for a while. Politely ask, in one short sentence, "
@@ -282,8 +315,18 @@ def build_instructions(bootstrap: Bootstrap, *, now: str | None = None) -> str:
     outcomes = campaign_outcomes(bootstrap)
     if outcomes:
         sections.append(outcome_instructions(outcomes))
+    if bootstrap.handoff.enabled:
+        sections.append(OPERATOR_INSTRUCTIONS)
     sections.append("# Language\n" + language_rule(profile.language))
     return "\n\n".join(sections)
+
+
+OPERATOR_INSTRUCTIONS = (
+    "# Human operator\n"
+    f"A human operator can join this call. If the customer asks for a person or an operator, "
+    f"or you cannot help them, call the {TOOL_REQUEST_OPERATOR} tool and tell the customer an "
+    "operator will join shortly. While an operator is on the call you stay silent."
+)
 
 
 def outcome_instructions(outcomes: Sequence[CampaignOutcome]) -> str:
@@ -423,15 +466,53 @@ class CallGoAgent(Agent):
         tools: Sequence[llm.Tool] = (),
         on_stt_final: SttFinalCallback | None = None,
         instructions: str | None = None,
+        is_passive: Callable[[], bool] | None = None,
+        llm: NotGivenOr[llm.LLM] = NOT_GIVEN,
+        stt: NotGivenOr[stt.STT] = NOT_GIVEN,
+        tts: NotGivenOr[tts.TTS] = NOT_GIVEN,
     ) -> None:
+        # set before Agent.__init__, which inspects the class members (``passive``)
+        self._is_passive = is_passive or (lambda: False)
+        # llm/stt/tts override the session's engines for this agent (menu -> other profile)
         super().__init__(
             instructions=instructions or build_instructions(bootstrap),
             tools=list(tools),
+            llm=llm,
+            stt=stt,
+            tts=tts,
         )
         self.bootstrap = bootstrap
         self._stt_lexicon = lexicon_for(bootstrap.lexicon, LexiconScope.STT)
         self._tts_lexicon = lexicon_for(bootstrap.lexicon, LexiconScope.TTS)
         self._on_stt_final = on_stt_final
+
+    @property
+    def passive(self) -> bool:
+        """True while an operator has taken over: the LLM does not answer."""
+        try:
+            return bool(self._is_passive())
+        except Exception:
+            log.exception("passive check failed")
+            return False
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        """In passive mode keep the customer's words in the context, but never reply."""
+        if not self.passive:
+            return
+        try:
+            chat_ctx = self.chat_ctx.copy()
+            chat_ctx.items.append(new_message)
+            await self.update_chat_ctx(chat_ctx)
+        except Exception as exc:  # noqa: BLE001 - context bookkeeping only
+            log.debug("could not keep passive turn in the chat context: %s", exc)
+        raise llm.StopResponse()
+
+    async def on_user_turn_exceeded(self, ev: UserTurnExceededEvent) -> None:
+        """The framework default cuts in with an LLM reply: never while passive."""
+        if not self.passive:
+            await super().on_user_turn_exceeded(ev)
 
     @property
     def is_outbound(self) -> bool:
@@ -493,6 +574,36 @@ class CallGoAgent(Agent):
             yield frame
 
 
+class SilentAgent(CallGoAgent):
+    """Speaks only through ``session.say`` (IVR menu, refusal messages); never replies.
+
+    Keeps :class:`CallGoAgent`'s STT/TTS normalization so digits in a menu prompt are read
+    out as Mongolian words.
+    """
+
+    def __init__(
+        self,
+        *,
+        bootstrap: Bootstrap,
+        on_stt_final: SttFinalCallback | None = None,
+        instructions: str = MENU_INSTRUCTIONS,
+    ) -> None:
+        super().__init__(
+            bootstrap=bootstrap,
+            on_stt_final=on_stt_final,
+            instructions=instructions,
+            is_passive=lambda: True,
+        )
+
+    async def on_enter(self) -> None:
+        return None
+
+    async def on_user_turn_completed(
+        self, turn_ctx: llm.ChatContext, new_message: llm.ChatMessage
+    ) -> None:
+        raise llm.StopResponse()
+
+
 # ---- live events --------------------------------------------------------------------------
 
 
@@ -526,6 +637,11 @@ class CallRecorder:
         self._away_prompted = False
         self._session: AgentSession[Any] | None = None
         self._tasks: set[asyncio.Task[None]] = set()
+        # While it returns True (operator handoff) session agent states are not published
+        # and silent customers are not prompted.
+        self.passive: Callable[[], bool] = lambda: False
+        # False while no LLM reply may be generated (IVR menu).
+        self.away_prompt_enabled: Callable[[], bool] = lambda: True
 
     # -- timing --
 
@@ -648,17 +764,58 @@ class CallRecorder:
         )
 
     def on_agent_state_changed(self, ev: AgentStateChangedEvent) -> None:
-        if ev.new_state == self._last_state:
+        if ev.new_state == self._last_state or self.passive():
             return
         self._last_state = ev.new_state
         self.emitter.agent_state(ev.new_state, self.llm_label)
+
+    def publish_state(self, state: AgentState) -> None:
+        if state != self._last_state:
+            self._last_state = state
+            self.emitter.agent_state(state, self.llm_label)
+
+    # -- operator handoff (HandoffObserver) --
+
+    def handoff_started(self) -> None:
+        self.publish_state("handoff")
+
+    def handoff_ended(self) -> None:
+        self._last_state = None  # the next session state is published again
+
+    def add_operator_turn(
+        self, text: str, raw: str = "", confidence: float = 0.0, duration_sec: float = 0.0
+    ) -> None:
+        """A final transcript of the human operator (``speaker = "human"``)."""
+        text = text.strip()
+        if not text:
+            return
+        end = self.ms()
+        self._add_turn(
+            TranscriptTurn(
+                call_id=self.bootstrap.call.id,
+                seq=self._next_seq(),
+                speaker=Speaker.HUMAN,
+                text=text,
+                raw_text=raw.strip() or text,
+                confidence=confidence,
+                start_ms=max(0, end - int(duration_sec * 1000)),
+                end_ms=end,
+                is_final=True,
+            )
+        )
 
     def on_user_state_changed(self, ev: UserStateChangedEvent) -> None:
         if ev.new_state == "speaking":
             if self._user_start_ms is None:
                 self._user_start_ms = self.ms(ev.created_at)
             self._away_prompted = False
-        elif ev.new_state == "away" and not self._away_prompted and self._session is not None:
+        elif (
+            ev.new_state == "away"
+            and not self._away_prompted
+            and self._session is not None
+            and not self.passive()
+            and self.away_prompt_enabled()
+        ):
             self._away_prompted = True
             try:
                 self._session.generate_reply(instructions=AWAY_PROMPT)
@@ -793,6 +950,8 @@ def fallback_analysis(
         outcome = resolve_outcome(OUTCOME_NO_CONTACT, outcomes)
         if outcome:
             note = _NO_CONTACT_NOTES.get(end_reason, _NO_CONTACT_DEFAULT_NOTE)
+    if not customer and end_reason in GATE_SUMMARIES:
+        return CallAnalysis(summary=GATE_SUMMARIES[end_reason], outcome=outcome, outcome_note=note)
     if not turns:
         return CallAnalysis(
             summary="Харилцан яриа бүртгэгдээгүй.", outcome=outcome, outcome_note=note
@@ -992,8 +1151,18 @@ class CallFinalizer:
     model: llm.LLM | None = None
     llm_label: str = ""
     analysis_timeout: float = ANALYSIS_TIMEOUT_SEC
+    usage: UsageTracker | None = None
+    # LLMs replaced mid-call (menu switched profile): closed with ``model`` at the end.
+    retired_models: list[llm.LLM] = field(default_factory=list)
     payload: CallEndedPayload | None = None
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+
+    def usage_snapshot(self) -> CallUsage:
+        if self.usage is None:
+            return CallUsage(llm_model=self.llm_label)
+        if not self.usage.llm_model:
+            self.usage.llm_model = self.llm_label
+        return self.usage.snapshot()
 
     async def finalize(self, close_reason: CloseReason | str | None = None) -> CallEndedPayload:
         async with self._lock:
@@ -1007,15 +1176,17 @@ class CallFinalizer:
                     await self.control.hangup()
                 except Exception as exc:  # noqa: BLE001
                     log.warning("hangup failed: %s", exc)
-            analysis = await analyze_call(
-                self.model,
-                self.recorder.turns,
-                end_reason=end_reason,
-                callbacks=self.state.callbacks,
-                timeout=self.analysis_timeout,
-                outcomes=campaign_outcomes(self.state.bootstrap),
-                recorded_outcome=self.state.outcome,
-            )
+            metering = self.usage.watch(self.model) if self.usage else contextlib.nullcontext()
+            with metering:
+                analysis = await analyze_call(
+                    self.model,
+                    self.recorder.turns,
+                    end_reason=end_reason,
+                    callbacks=self.state.callbacks,
+                    timeout=self.analysis_timeout,
+                    outcomes=campaign_outcomes(self.state.bootstrap),
+                    recorded_outcome=self.state.outcome,
+                )
             outcome, outcome_note = final_outcome(self.state, analysis)
             summary = " ".join(
                 s for s in (analysis.summary, callbacks_note(self.state.callbacks)) if s
@@ -1030,12 +1201,16 @@ class CallFinalizer:
                 outcome=outcome,
                 outcome_note=outcome_note,
             )
-            self.emitter.call_ended(self.payload)
+            usage = self.usage_snapshot()
+            self.emitter.call_ended(
+                self.payload, usage=usage, callbacks=self.state.callback_intents()
+            )
             await self.recorder.drain()
             await self.emitter.aclose()
-            if self.model is not None:
-                with contextlib.suppress(Exception):
-                    await self.model.aclose()
+            for model in (*self.retired_models, self.model):
+                if model is not None:
+                    with contextlib.suppress(Exception):
+                        await model.aclose()
             log.info(
                 "call %s ended: reason=%s duration=%ss sentiment=%s intent=%s outcome=%s",
                 self.state.bootstrap.call.id,
@@ -1044,6 +1219,15 @@ class CallFinalizer:
                 analysis.sentiment.value,
                 analysis.intent or "-",
                 outcome or "-",
+            )
+            log.info(
+                "call %s usage: llm %d/%d tokens, stt %.1fs, tts %d chars, cost %d MNT",
+                self.state.bootstrap.call.id,
+                usage.llm_tokens_in,
+                usage.llm_tokens_out,
+                usage.stt_seconds,
+                usage.tts_chars,
+                usage.cost_mnt,
             )
             if self.state.knowledge_lookups:
                 # Metrics only: the summary is customer-facing and stays untouched.
@@ -1126,6 +1310,94 @@ def call_tools(
     return tools
 
 
+def _profile_needs(old: AgentProfile, new: AgentProfile) -> tuple[bool, bool]:
+    """(new STT needed, new TTS needed) when switching from ``old`` to ``new``."""
+    stt_changed = (old.stt_provider, old.stt_model, old.language) != (
+        new.stt_provider,
+        new.stt_model,
+        new.language,
+    )
+    tts_changed = (old.tts_provider, old.tts_voice, old.language) != (
+        new.tts_provider,
+        new.tts_voice,
+        new.language,
+    )
+    return stt_changed, tts_changed
+
+
+def _same_llm(a: LLMConfig, b: LLMConfig) -> bool:
+    return (a.id, a.provider, a.model, a.base_url) == (b.id, b.provider, b.model, b.base_url)
+
+
+async def refuse_call(
+    ctx: JobContext,
+    f: PipelineFactories,
+    boot: Bootstrap,
+    participant: rtc.RemoteParticipant,
+    gate: CallGate,
+    *,
+    state: CallState,
+    recorder: CallRecorder,
+    usage: UsageTracker,
+) -> None:
+    """Say ``gate.message`` with a TTS-only session (no STT, no LLM) and return.
+
+    The caller is not reported as answered (no ``call.answered``: no recording, no
+    conversation); the finalizer then emits ``call.ended`` with ``gate.end_reason``.
+    """
+    state.set_end_reason(gate.end_reason)
+    recorder.mark_answered()
+    log.info("refusing call %s: %s", boot.call.id, gate.end_reason)
+    try:
+        tts_engine = f.build_tts(boot.profile)
+    except Exception:
+        log.exception("could not build TTS for the %s message; hanging up", gate.end_reason)
+        return
+    session: AgentSession[CallState] = AgentSession(tts=tts_engine, userdata=state)
+    recorder.attach(session)
+    usage.attach(session)
+    try:
+        await session.start(
+            agent=SilentAgent(bootstrap=boot, instructions="Say the given message only."),
+            room=ctx.room,
+            room_options=room_io.RoomOptions(
+                participant_identity=participant.identity,
+                participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_SIP],
+                audio_input=False,
+                text_input=False,
+                close_on_disconnect=True,
+            ),
+        )
+        handle = session.say(gate.message, allow_interruptions=False)
+        await asyncio.wait_for(handle.wait_for_playout(), timeout=REFUSAL_PLAYOUT_TIMEOUT_SEC)
+    except Exception as exc:  # noqa: BLE001 - the call ends either way
+        log.warning("%s message not played: %r", gate.end_reason, exc)
+    finally:
+        with contextlib.suppress(Exception):
+            await session.aclose()
+
+
+async def run_menu(
+    route: ResolvedRoute,
+    session: Any,
+    room: Any,
+    caller_identity: str,
+    *,
+    keys: KeyQueue | None = None,
+) -> MenuResult:
+    """Run the IVR menu on a started session: DTMF from the caller plus spoken keys."""
+    queue = keys or KeyQueue()
+    detach = [
+        attach_dtmf(room, queue, caller_identity),
+        attach_spoken_keys(session, queue, route.menu),
+    ]
+    try:
+        return await MenuFlow(route, SessionPromptPlayer(session), queue).run()
+    finally:
+        for d in detach:
+            d()
+
+
 async def run_call(
     ctx: JobContext,
     client: BackendClient,
@@ -1188,8 +1460,17 @@ async def run_call(
     emitter = EventEmitter(client, org_id=boot.org.id, call_id=boot.call.id)
     emitter.start()
     state = CallState(bootstrap=boot)
+
+    def _on_handoff_request(_reason: str) -> None:
+        emitter.call_handoff("requested")
+
+    state.on_handoff_request = _on_handoff_request
     recorder = CallRecorder(emitter, boot, hit_sink=client)
-    finalizer = CallFinalizer(state=state, recorder=recorder, emitter=emitter, control=control)
+    recorder.passive = lambda: state.passive
+    usage = UsageTracker()
+    finalizer = CallFinalizer(
+        state=state, recorder=recorder, emitter=emitter, control=control, usage=usage
+    )
     finalizers.append(finalizer)
 
     if meta.direction == CallDirection.OUTBOUND and not await wait_for_answer(
@@ -1200,6 +1481,15 @@ async def run_call(
         ctx.shutdown("no answer")
         return
 
+    gate = gate_for(boot)
+    if gate is not None:
+        await refuse_call(
+            ctx, f, boot, participant, gate, state=state, recorder=recorder, usage=usage
+        )
+        await finalizer.finalize()
+        ctx.shutdown(gate.end_reason)
+        return
+
     chain = select_llm_chain(boot)
     try:
         if chain is None:
@@ -1207,7 +1497,7 @@ async def run_call(
         model = f.build_llm(chain[0], chain[1])
         finalizer.model = model  # closed by the finalizer even if STT/TTS fail below
         llm_label = f.describe_llm(chain[0])
-        finalizer.llm_label = recorder.llm_label = llm_label
+        finalizer.llm_label = recorder.llm_label = usage.llm_model = llm_label
         stt_engine = f.build_stt(boot.profile)
         tts_engine = f.build_tts(boot.profile)
     except Exception:
@@ -1227,6 +1517,7 @@ async def run_call(
         userdata=state,
     )
     recorder.attach(session)
+    usage.attach(session)
 
     closed: asyncio.Future[CloseReason | None] = asyncio.get_running_loop().create_future()
 
@@ -1244,10 +1535,85 @@ async def run_call(
     session.on("close", _on_close)
     ctx.room.on("participant_disconnected", _on_participant_left)
 
-    agent = CallGoAgent(
-        bootstrap=boot,
-        tools=call_tools(state, control, client),
-        on_stt_final=recorder.on_stt_final,
+    def make_agent(b: Bootstrap, **engines: Any) -> CallGoAgent:
+        return CallGoAgent(
+            bootstrap=b,
+            tools=call_tools(state, control, client),
+            on_stt_final=recorder.on_stt_final,
+            is_passive=lambda: state.passive,
+            **engines,
+        )
+
+    async def continue_with(chosen: Bootstrap) -> None:
+        """Switch from the menu to the conversational agent for ``chosen``'s profile."""
+        in_menu[0] = False
+        engines: dict[str, Any] = {}
+        if chosen is not boot:
+            state.bootstrap = recorder.bootstrap = chosen
+            new_chain = select_llm_chain(chosen)
+            try:
+                if (
+                    new_chain is not None
+                    and chain is not None
+                    and not _same_llm(new_chain[0], chain[0])
+                ):
+                    new_model = f.build_llm(new_chain[0], new_chain[1])
+                    engines["llm"] = new_model
+                    if finalizer.model is not None:
+                        finalizer.retired_models.append(finalizer.model)
+                    finalizer.model = new_model
+                    label = f.describe_llm(new_chain[0])
+                    finalizer.llm_label = recorder.llm_label = usage.llm_model = label
+                need_stt, need_tts = _profile_needs(boot.profile, chosen.profile)
+                if need_stt:
+                    engines["stt"] = f.build_stt(chosen.profile)
+                if need_tts:
+                    engines["tts"] = f.build_tts(chosen.profile)
+            except Exception:
+                log.exception("could not build engines for profile %s", chosen.profile.id)
+        try:
+            agent = make_agent(chosen, **engines)
+        except Exception:
+            log.exception("agent for profile %s rejected its engines", chosen.profile.id)
+            agent = make_agent(chosen)
+        session.update_agent(agent)
+
+    async def menu_then_agent(route: ResolvedRoute) -> None:
+        chosen = boot
+        try:
+            result = await run_menu(route, session, ctx.room, participant.identity)
+            option = result.option
+            if option is not None and option.agent_profile_id != boot.profile.id:
+                chosen = await client.bootstrap(
+                    room=room_name,
+                    sip_number=sip.trunk_phone_number,
+                    from_number=from_number,
+                    to_number=to_number,
+                    direction=meta.direction,
+                    call_id=boot.call.id,
+                    profile_id=option.agent_profile_id,
+                )
+            elif option is None:
+                log.info("menu timed out; continuing with profile %s", boot.profile.id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("menu flow failed; continuing with profile %s", boot.profile.id)
+            chosen = boot
+        try:
+            await continue_with(chosen)
+        except Exception:
+            log.exception("could not start the agent after the menu; hanging up")
+            state.set_end_reason("failed")
+            session.shutdown(drain=False)
+
+    route = menu_route(boot)
+    in_menu = [route is not None]
+    recorder.away_prompt_enabled = lambda: not in_menu[0]
+    agent: CallGoAgent = (
+        SilentAgent(bootstrap=boot, on_stt_final=recorder.on_stt_final)
+        if route is not None
+        else make_agent(boot)
     )
     recorder.mark_answered()
     emitter.call_answered(
@@ -1278,14 +1644,40 @@ async def run_call(
         ctx.shutdown("session start failed")
         return
 
+    handoff: HandoffController | None = None
+    if boot.handoff.enabled:
+        stt_lexicon = lexicon_for(boot.lexicon, LexiconScope.STT)
+
+        def _operator_final(text: str, confidence: float, duration: float) -> None:
+            corrected, _ = normalize_stt_text(text, stt_lexicon)
+            recorder.add_operator_turn(corrected, text, confidence, duration)
+
+        handoff = HandoffController(
+            ctx.room,
+            session,
+            state,
+            emitter,
+            customer_identity=participant.identity,
+            observer=recorder,
+            transcribe=OperatorTranscriber(stt_engine, vad_model, _operator_final),
+        )
+        handoff.start()
+
+    background: list[asyncio.Task[None]] = []
     max_sec = boot.profile.max_duration_sec or settings.max_call_duration_sec
-    timer = asyncio.create_task(
-        enforce_max_duration(session, state, max_sec, boot.profile.language)
+    background.append(
+        asyncio.create_task(enforce_max_duration(session, state, max_sec, boot.profile.language))
     )
+    if route is not None:
+        background.append(asyncio.create_task(menu_then_agent(route), name="callgo-menu"))
     try:
         close_reason = await closed
     finally:
-        timer.cancel()
+        for task in background:
+            task.cancel()
+        await asyncio.gather(*background, return_exceptions=True)
         ctx.room.off("participant_disconnected", _on_participant_left)
+        if handoff is not None:
+            await handoff.aclose()
     await finalizer.finalize(close_reason)
     ctx.shutdown(state.end_reason or "call ended")

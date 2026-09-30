@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type {
-  AgentProfile, DoNotCallEntry, KnowledgeBase, KnowledgeChunkPreview, KnowledgeDocument, KnowledgeMode, KnowledgeSearchResponse,
+  AgentProfile, DoNotCallEntry, PostCallAction, ResolvedRoute, RoutingConfig, SMSConfig, SMSMessage, Webhook, WebhookDelivery, KnowledgeBase, KnowledgeChunkPreview, KnowledgeDocument, KnowledgeMode, KnowledgeSearchResponse,
   LLMCatalogEntry, LLMConfig, LLMProvider, Organization, SIPNumber, User,
 } from '@/lib/types'
+import type { APIKey, AuditEntry, Invitation, Organization as IdentityOrg, Plan, Role, Subscription, User as IdentityUser, UserStatus } from '@/lib/types'
+import { useAuth } from '@/app/auth'
 
 const KEYS = {
   sip: ['settings', 'sip-numbers'] as const,
@@ -47,6 +49,7 @@ export interface AgentProfileBody {
   name: string; systemPrompt: string; greeting: string; language: string; llmConfigId: string | null
   sttProvider: string; sttModel: string; ttsProvider: string; ttsVoice: string; maxDurationSec: number
   tools: string[]; transferNumber?: string; knowledgeBaseId: string | null; knowledgeMode: KnowledgeMode
+  postCallActions?: PostCallAction[]
 }
 
 export function useAgentProfiles() {
@@ -242,6 +245,228 @@ export function useDocumentChunks(docId: string | null, offset = 0) {
   return useQuery({
     queryKey: [...knowledgeKey, 'chunks', docId, offset] as const, enabled: !!docId,
     queryFn: () => api.get<DocumentChunksData>(`/knowledge-documents/${docId}`, { offset }),
+    placeholderData: (prev) => prev,
+  })
+}
+
+// ---- Feature gate (403 feature_unavailable) ----
+/** Duck-typed so it also works when `@/lib/api` is mocked (no `HttpError` export). */
+export function isFeatureUnavailable(e: unknown): boolean {
+  if (typeof e !== 'object' || e === null) return false
+  const err = e as { status?: number; code?: string }
+  return err.status === 403 && err.code === 'feature_unavailable'
+}
+
+// ---- Inbound routing ----
+export function useSaveRouting() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, routing }: { id: string; routing: RoutingConfig }) => api.put<{ sipNumber?: SIPNumber }>(`/sip-numbers/${id}/routing`, routing),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.sip }),
+  })
+}
+export function useResolveRoute() {
+  return useMutation({
+    mutationFn: async ({ id, at }: { id: string; at: string }) =>
+      (await api.post<{ route: ResolvedRoute }>(`/sip-numbers/${id}/routing/resolve`, undefined, { at })).route,
+  })
+}
+
+// ---- Webhooks ----
+export const webhooksKey = ['settings', 'webhooks'] as const
+export interface WebhookCreateBody { url: string; events: string[]; description?: string }
+export interface WebhookUpdateBody { url?: string; events?: string[]; active?: boolean; description?: string }
+export const DELIVERY_PAGE_SIZE = 20
+
+export function useWebhooks() {
+  return useQuery({
+    queryKey: webhooksKey, retry: false,
+    queryFn: async () => (await api.get<{ items: Webhook[] }>('/webhooks')).items ?? [],
+  })
+}
+export function useCreateWebhook() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: WebhookCreateBody) => api.post<{ webhook: Webhook; secret: string }>('/webhooks', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: webhooksKey }),
+  })
+}
+export function useUpdateWebhook() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: WebhookUpdateBody }) => api.put<{ webhook: Webhook }>(`/webhooks/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: webhooksKey }),
+  })
+}
+export function useDeleteWebhook() {
+  const qc = useQueryClient()
+  return useMutation({ mutationFn: (id: string) => api.delete(`/webhooks/${id}`), onSuccess: () => qc.invalidateQueries({ queryKey: webhooksKey }) })
+}
+export function useRotateWebhookSecret() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<{ secret: string }>(`/webhooks/${id}/rotate-secret`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: webhooksKey }),
+  })
+}
+export function useTestWebhook() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<{ delivery: WebhookDelivery }>(`/webhooks/${id}/test`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: webhooksKey }),
+  })
+}
+export function useWebhookDeliveries(id: string | null, offset: number) {
+  return useQuery({
+    queryKey: [...webhooksKey, 'deliveries', id, offset] as const, enabled: !!id,
+    queryFn: () => api.get<{ items: WebhookDelivery[]; total: number }>(`/webhooks/${id}/deliveries`, { limit: DELIVERY_PAGE_SIZE, offset }),
+    placeholderData: (prev) => prev,
+  })
+}
+export function useRetryDelivery() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post<{ delivery: WebhookDelivery }>(`/webhook-deliveries/${id}/retry`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: webhooksKey }),
+  })
+}
+
+// ---- SMS ----
+export const smsKey = ['settings', 'sms'] as const
+export const SMS_PAGE_SIZE = 20
+export interface SMSConfigBody { provider: 'mock' | 'http'; url?: string; apiKey?: string; from?: string; bodyTemplate?: string }
+
+export function useSMSConfig() {
+  return useQuery({ queryKey: [...smsKey, 'config'] as const, retry: false, queryFn: () => api.get<SMSConfig>('/sms/config') })
+}
+export function useSaveSMSConfig() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: SMSConfigBody) => api.put<SMSConfig>('/sms/config', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: smsKey }),
+  })
+}
+export function useSendSMS() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { to: string; body: string; callId?: string }) => api.post<{ message: SMSMessage }>('/sms/send', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: [...smsKey, 'messages'] }),
+  })
+}
+export function useSMSMessages(offset: number, enabled = true) {
+  return useQuery({
+    queryKey: [...smsKey, 'messages', offset] as const, enabled, retry: false,
+    queryFn: () => api.get<{ items: SMSMessage[]; total: number }>('/sms', { limit: SMS_PAGE_SIZE, offset }),
+    placeholderData: (prev) => prev,
+  })
+}
+
+// ---- Identity: organization, members, invitations, API keys, audit (F1) ----
+export const identityKey = ['settings', 'identity'] as const
+export const orgKey = [...identityKey, 'org'] as const
+export const membersKey = [...identityKey, 'members'] as const
+export const apiKeysKey = [...identityKey, 'api-keys'] as const
+export const auditKey = [...identityKey, 'audit'] as const
+
+export interface OrgData { org: IdentityOrg; subscription?: Subscription | null; plan?: Plan | null }
+export interface OrgUpdateBody { name?: string; timezone?: string; settings?: Record<string, unknown> }
+export interface MembersData { items: IdentityUser[]; invitations: Invitation[] }
+export interface MemberUpdateBody { role?: Role; status?: Extract<UserStatus, 'active' | 'disabled'> }
+export interface CreateAPIKeyResult { apiKey: APIKey; plaintext: string }
+export interface AuditFilters { actorId?: string; action?: string; from?: string; to?: string; limit: number; offset: number }
+
+export function useOrg() {
+  return useQuery({ queryKey: orgKey, queryFn: () => api.get<OrgData>('/org') })
+}
+export function useUpdateOrg() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: OrgUpdateBody) => api.put<{ org: IdentityOrg }>('/org', body),
+    onSuccess: (res) => {
+      if (res?.org) useAuth.getState().setOrg(res.org)
+      qc.invalidateQueries({ queryKey: orgKey })
+      qc.invalidateQueries({ queryKey: KEYS.me })
+    },
+  })
+}
+
+export function useMembers(enabled = true) {
+  return useQuery({
+    queryKey: membersKey, enabled, retry: false,
+    queryFn: async () => {
+      const res = await api.get<Partial<MembersData>>('/org/members')
+      return { items: res?.items ?? [], invitations: res?.invitations ?? [] } satisfies MembersData
+    },
+  })
+}
+export function useInviteMember() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { email: string; role: Role }) => api.post<{ invitation: Invitation }>('/org/invitations', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: membersKey }),
+  })
+}
+/**
+ * The contract has no dedicated resend endpoint: re-issuing POST /org/invitations with the same
+ * email + role creates a fresh token (new expiry) and sends the email again.
+ */
+export function useResendInvitation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (inv: Pick<Invitation, 'email' | 'role'>) => api.post<{ invitation: Invitation }>('/org/invitations', { email: inv.email, role: inv.role }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: membersKey }),
+  })
+}
+export function useCancelInvitation() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/org/invitations/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: membersKey }),
+  })
+}
+export function useUpdateMember() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: MemberUpdateBody }) => api.put<{ user: IdentityUser }>(`/org/members/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: membersKey }),
+  })
+}
+export function useRemoveMember() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/org/members/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: membersKey }),
+  })
+}
+
+export function useAPIKeys() {
+  return useQuery({
+    queryKey: apiKeysKey, retry: false,
+    queryFn: async () => (await api.get<{ items: APIKey[] }>('/org/api-keys'))?.items ?? [],
+  })
+}
+export function useCreateAPIKey() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (body: { name: string; scopes: string[] }) => api.post<CreateAPIKeyResult>('/org/api-keys', body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: apiKeysKey }),
+  })
+}
+export function useRevokeAPIKey() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.delete(`/org/api-keys/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: apiKeysKey }),
+  })
+}
+
+export function useAuditLog(filters: AuditFilters) {
+  return useQuery({
+    queryKey: [...auditKey, filters] as const, retry: false,
+    queryFn: async () => {
+      const res = await api.get<{ items: AuditEntry[]; total: number }>('/org/audit', { ...filters })
+      return { items: res?.items ?? [], total: res?.total ?? 0 }
+    },
     placeholderData: (prev) => prev,
   })
 }

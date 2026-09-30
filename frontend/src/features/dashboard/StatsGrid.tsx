@@ -7,7 +7,7 @@ import { fmtNumber, fmtPercent } from './format'
 
 function StatSkeleton() {
   return (
-    <div className="rounded-[var(--radius-lg)] border border-[var(--border)] bg-[var(--surface-1)] px-4 py-3.5" data-testid="stat-skeleton">
+    <div className="rounded-[var(--radius-lg)] border border-[var(--border)] border-t-[var(--border-highlight)] bg-[var(--surface-1)] px-4 py-3.5" data-testid="stat-skeleton">
       <Skeleton className="h-3 w-20" />
       <Skeleton className="mt-3 h-6 w-16" />
       <Skeleton className="mt-2 h-3 w-24" />

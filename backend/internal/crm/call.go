@@ -29,7 +29,8 @@ var activeStatuses = []string{
 const callCols = `c.id, c.org_id, c.contact_id, c.campaign_id, c.sip_number_id, c.agent_profile_id,
 	c.direction, c.status, c.from_number, c.to_number, c.room_name, c.sip_call_id, c.participant_id,
 	c.started_at, c.answered_at, c.ended_at, c.duration_sec, c.recording_url, c.summary, c.sentiment,
-	c.intent, c.end_reason, c.llm_model_used, c.metadata, c.outcome, c.outcome_note, c.created_at, c.updated_at`
+	c.intent, c.end_reason, c.llm_model_used, c.metadata, c.outcome, c.outcome_note, c.recording, c.handoff,
+	c.operator_id, c.usage, c.created_at, c.updated_at`
 
 func scanCall(row pgx.Row) (*domain.Call, error) {
 	var c domain.Call
@@ -37,7 +38,8 @@ func scanCall(row pgx.Row) (*domain.Call, error) {
 	err := row.Scan(&c.ID, &c.OrgID, &c.ContactID, &c.CampaignID, &c.SIPNumberID, &c.AgentProfileID,
 		&c.Direction, &c.Status, &c.FromNumber, &c.ToNumber, &c.RoomName, &c.SIPCallID, &c.ParticipantID,
 		&c.StartedAt, &c.AnsweredAt, &c.EndedAt, &c.DurationSec, &c.RecordingURL, &c.Summary, &c.Sentiment,
-		&c.Intent, &c.EndReason, &c.LLMModelUsed, &c.Metadata, &outcome, &outcomeNote, &c.CreatedAt, &c.UpdatedAt)
+		&c.Intent, &c.EndReason, &c.LLMModelUsed, &c.Metadata, &outcome, &outcomeNote, &c.Recording, &c.Handoff,
+		&c.OperatorID, &c.Usage, &c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -60,9 +62,44 @@ func jsonObject[M ~map[string]V, V any](m M) (string, error) {
 	return string(b), nil
 }
 
+// jsonNullable renders v as JSON text for a nullable jsonb column; a nil
+// pointer is stored as SQL NULL.
+func jsonNullable[T any](v *T) (*string, error) {
+	if v == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("crm: marshal json: %w", err)
+	}
+	out := string(b)
+	return &out, nil
+}
+
+// callExtras holds the encoded SaaS columns of a call (recording, usage).
+type callExtras struct {
+	recording, usage *string
+}
+
+func encodeCallExtras(c *domain.Call) (callExtras, error) {
+	rec, err := jsonNullable(c.Recording)
+	if err != nil {
+		return callExtras{}, err
+	}
+	usage, err := jsonNullable(c.Usage)
+	if err != nil {
+		return callExtras{}, err
+	}
+	return callExtras{recording: rec, usage: usage}, nil
+}
+
 // CreateCall inserts a call. StartedAt defaults to now().
 func (s *Store) CreateCall(ctx context.Context, c *domain.Call) error {
 	meta, err := jsonObject(callMetadataForStorage(c))
+	if err != nil {
+		return err
+	}
+	ex, err := encodeCallExtras(c)
 	if err != nil {
 		return err
 	}
@@ -71,20 +108,26 @@ func (s *Store) CreateCall(ctx context.Context, c *domain.Call) error {
 		`INSERT INTO calls (id, org_id, contact_id, campaign_id, sip_number_id, agent_profile_id, direction,
 			status, from_number, to_number, room_name, sip_call_id, participant_id, started_at, answered_at,
 			ended_at, duration_sec, recording_url, summary, sentiment, intent, end_reason, llm_model_used, metadata,
-			outcome, outcome_note)
+			outcome, outcome_note, recording, handoff, operator_id, usage)
 		 VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-			COALESCE($14, now()), $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26)
+			COALESCE($14, now()), $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26,
+			$27::jsonb, $28, $29, $30::jsonb)
 		 RETURNING id, started_at, created_at, updated_at`,
 		nilIfZero(c.ID), c.OrgID, c.ContactID, c.CampaignID, c.SIPNumberID, c.AgentProfileID,
 		string(c.Direction), string(c.Status), c.FromNumber, c.ToNumber, c.RoomName, c.SIPCallID,
 		c.ParticipantID, nilIfZeroTime(c.StartedAt), c.AnsweredAt, c.EndedAt, c.DurationSec, c.RecordingURL,
-		c.Summary, string(c.Sentiment), c.Intent, c.EndReason, c.LLMModelUsed, meta, outcome, outcomeNote)
+		c.Summary, string(c.Sentiment), c.Intent, c.EndReason, c.LLMModelUsed, meta, outcome, outcomeNote,
+		ex.recording, string(c.Handoff), c.OperatorID, ex.usage)
 	return dbErr("create call", row.Scan(&c.ID, &c.StartedAt, &c.CreatedAt, &c.UpdatedAt))
 }
 
 // UpdateCall overwrites all mutable fields of a call (org is immutable).
 func (s *Store) UpdateCall(ctx context.Context, c *domain.Call) error {
 	meta, err := jsonObject(callMetadataForStorage(c))
+	if err != nil {
+		return err
+	}
+	ex, err := encodeCallExtras(c)
 	if err != nil {
 		return err
 	}
@@ -95,13 +138,14 @@ func (s *Store) UpdateCall(ctx context.Context, c *domain.Call) error {
 			participant_id = $12, started_at = COALESCE($13, started_at), answered_at = $14, ended_at = $15,
 			duration_sec = $16, recording_url = $17, summary = $18, sentiment = $19, intent = $20,
 			end_reason = $21, llm_model_used = $22, metadata = $23, outcome = $24, outcome_note = $25,
-			updated_at = now()
+			recording = $26::jsonb, handoff = $27, operator_id = $28, usage = $29::jsonb, updated_at = now()
 		 WHERE id = $1
 		 RETURNING org_id, started_at, created_at, updated_at`,
 		c.ID, c.ContactID, c.CampaignID, c.SIPNumberID, c.AgentProfileID, string(c.Direction),
 		string(c.Status), c.FromNumber, c.ToNumber, c.RoomName, c.SIPCallID, c.ParticipantID,
 		nilIfZeroTime(c.StartedAt), c.AnsweredAt, c.EndedAt, c.DurationSec, c.RecordingURL, c.Summary,
-		string(c.Sentiment), c.Intent, c.EndReason, c.LLMModelUsed, meta, outcome, outcomeNote)
+		string(c.Sentiment), c.Intent, c.EndReason, c.LLMModelUsed, meta, outcome, outcomeNote,
+		ex.recording, string(c.Handoff), c.OperatorID, ex.usage)
 	return dbErr("update call", row.Scan(&c.OrgID, &c.StartedAt, &c.CreatedAt, &c.UpdatedAt))
 }
 

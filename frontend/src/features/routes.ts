@@ -9,6 +9,10 @@ import { routes as contactsRoutes } from './contacts/routes'
 import { routes as campaignsRoutes } from './campaigns/routes'
 import { routes as lexiconRoutes } from './lexicon/routes'
 import { routes as settingsRoutes } from './settings/routes'
+import { routes as analyticsRoutes } from './analytics/routes'
+import { routes as callbacksRoutes } from './callbacks/routes'
+import { routes as billingRoutes } from './billing/routes'
+import { routes as adminRoutes } from './admin/routes'
 
 export const featureRoutes: RouteObject[] = [
   ...liveRoutes,
@@ -17,5 +21,9 @@ export const featureRoutes: RouteObject[] = [
   ...contactsRoutes,
   ...campaignsRoutes,
   ...lexiconRoutes,
+  ...analyticsRoutes,
+  ...callbacksRoutes,
   ...settingsRoutes,
+  ...billingRoutes,
+  ...adminRoutes,
 ]

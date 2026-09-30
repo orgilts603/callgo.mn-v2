@@ -16,6 +16,7 @@ import (
 
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/auth"
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/domain"
+	cgmw "github.com/orgilts603/callgo.mn-v2/backend/internal/middleware"
 )
 
 type server struct {
@@ -84,15 +85,60 @@ func (s *server) routes() http.Handler {
 
 	admin := auth.RequireRole(domain.RoleOwner, domain.RoleAdmin)
 
+	// SaaS features mounted on the root router (they carry their own auth
+	// and full paths).
+	if s.d.Recordings.Svc != nil {
+		mountRecordings(r, s.d.Recordings, s.cfg, s.log)
+	}
+	if s.d.Handoff.Calls != nil {
+		mountHandoff(r, s.d.Handoff, s.cfg, s.log)
+	}
+	if s.d.Admin.Identity != nil {
+		mountAdmin(r, s.d.Admin, s.cfg, s.log)
+	}
+
+	var authOpts []auth.Option
+	if s.d.APIKeys != nil {
+		authOpts = append(authOpts, auth.WithAPIKeys(s.d.APIKeys))
+	}
+	requireAuth := auth.RequireAuth(s.cfg.JWTSecret, authOpts...)
+
 	r.Route("/api", func(r chi.Router) {
-		r.Post("/auth/login", s.login)
+		if s.d.Identity.Svc != nil {
+			mountIdentity(r, s.d.Identity, s.cfg, s.log)
+		} else {
+			r.Post("/auth/login", s.login)
+		}
 		r.Post("/auth/register", s.register)
 		r.Post("/livekit/webhook", s.livekitWebhook)
+		if s.d.Billing.Svc != nil {
+			bd := s.d.Billing
+			if bd.Auth == nil {
+				bd.Auth = requireAuth
+			}
+			mountBilling(r, bd, s.cfg, s.log)
+		}
 
 		r.Group(func(r chi.Router) {
-			r.Use(auth.RequireAuth(s.cfg.JWTSecret))
+			r.Use(requireAuth)
+			if s.d.OrgStatus != nil {
+				r.Use(cgmw.OrgGate(cgmw.CachedOrgStatus(s.d.OrgStatus, 30*time.Second)))
+			}
 			r.Get("/auth/me", s.me)
 			r.Get("/ws", s.ws)
+
+			if s.d.Analytics.Store != nil {
+				mountAnalytics(r, s.d.Analytics, s.log)
+			}
+			if s.d.Integrations.Repo != nil {
+				mountIntegrations(r, s.d.Integrations, s.cfg, s.log)
+			}
+			if s.d.Routing.Numbers != nil {
+				mountRouting(r, &s.d.Routing, s.cfg, s.log)
+			}
+			if s.d.Callbacks.Repo != nil {
+				mountCallbacks(r, &s.d.Callbacks, s.cfg, s.log)
+			}
 
 			r.Get("/stats", s.stats)
 			r.Get("/stats/daily", s.statsDaily)
@@ -104,7 +150,9 @@ func (s *server) routes() http.Handler {
 				r.Get("/{id}", s.getCall)
 				r.Post("/{id}/hangup", s.hangup)
 				r.Post("/{id}/transfer", s.transfer)
-				r.Get("/{id}/recording", s.recording)
+				if s.d.Recordings.Svc == nil {
+					r.Get("/{id}/recording", s.recording)
+				}
 				r.Post("/{id}/dnc", s.callToDNC)
 			})
 

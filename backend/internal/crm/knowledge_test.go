@@ -422,6 +422,9 @@ func TestMigrationKnowledgeDownUp(t *testing.T) {
 
 	step(4)
 	require.True(t, columnExists(t, ctx, "knowledge_documents", "extracted_text"))
+	// Back to the latest schema: the Store reads columns added by later migrations.
+	require.NoError(t, Migrate(ctx, testDSN))
+	testPool.Reset()
 	got, err := s.GetAgentProfile(ctx, p.ID)
 	require.NoError(t, err)
 	require.Equal(t, domain.KnowledgeOff, got.KnowledgeMode, "column default after re-up")

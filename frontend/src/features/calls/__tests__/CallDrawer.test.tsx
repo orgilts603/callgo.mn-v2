@@ -1,8 +1,14 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { configure, act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { api } from '@/lib/api'
 import { CallDrawer } from '../CallDrawer'
 import { callKey, type CallDetail } from '../api'
+import { useAuth } from '@/app/auth'
+import { testUser } from '@/app/testing'
 import { connectFakeLive, makeCall, makeQueryClient, makeTurn, resetLive, wrapper } from '../testUtils'
+
+// jsdom + recharts/wavesurfer are slow when the CI box is busy.
+vi.setConfig({ testTimeout: 30_000 })
+configure({ asyncUtilTimeout: 10_000 })
 
 const ws = vi.hoisted(() => ({ mock: null as null | ReturnType<typeof import('../testUtils').createWaveSurferMock> }))
 vi.mock('wavesurfer.js', async () => {
@@ -10,6 +16,7 @@ vi.mock('wavesurfer.js', async () => {
   ws.mock = make()
   return { default: { create: ws.mock.create } }
 })
+vi.mock('livekit-client', async () => (await import('../livekitTestUtils')).createLiveKitMock())
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 vi.mock('@/lib/api', async (orig) => ({
   ...(await orig<typeof import('@/lib/api')>()),
@@ -86,23 +93,73 @@ describe('CallDrawer', () => {
   })
 
   it('renders the waveform player for recorded calls and seeks from the transcript', async () => {
-    get.mockResolvedValue(detail({
-      call: makeCall({ status: 'completed', durationSec: 95, recordingUrl: 'https://rec/x.ogg', summary: 'Захиалга өгсөн', sentiment: 'positive', intent: 'order', endReason: 'hangup_customer', llmModelUsed: 'google/gemini-2.5-flash' }),
-    }))
+    get.mockImplementation(async (path: string) => {
+      if (path === '/calls/c1/recording/url') return { url: 'https://rec/x.ogg', expiresAt: new Date(Date.now() + 600_000).toISOString() }
+      if (path === '/calls/c1') {
+        return detail({
+          call: makeCall({
+            status: 'completed', durationSec: 95, recordingUrl: '/api/calls/c1/recording', recording: { status: 'ready', sizeBytes: 5000, durationSec: 95 },
+            summary: 'Захиалга өгсөн', sentiment: 'positive', intent: 'order', endReason: 'hangup_customer', llmModelUsed: 'google/gemini-2.5-flash',
+            usage: { llmTokensIn: 1200, llmTokensOut: 300, sttSeconds: 45, ttsChars: 800, costMnt: 1234, llmModel: 'google/gemini-2.5-flash' },
+          }),
+        })
+      }
+      throw new Error(`unexpected ${path}`)
+    })
     render(<CallDrawer callId="c1" onClose={() => {}} />, { wrapper: wrapper(makeQueryClient()) })
     expect(await screen.findByText('Захиалга өгсөн')).toBeInTheDocument()
     expect(screen.getByText('Харилцагч таслав')).toBeInTheDocument()
     expect(screen.getByText('Эерэг')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Дуудлага таслах/ })).toBeNull()
-    expect(screen.getByRole('link', { name: /Бичлэг татах/ })).toHaveAttribute('href', 'https://rec/x.ogg')
+    expect(screen.getByTestId('usage-line')).toHaveTextContent('Зардал: 1 234 ₮')
+    expect(screen.getByTestId('usage-line')).toHaveTextContent('LLM 1 200/300 токен')
+    expect(await screen.findByRole('link', { name: /Бичлэг татах/ })).toHaveAttribute('href', 'https://rec/x.ogg')
 
     const m = ws.mock!
-    expect(m.create).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://rec/x.ogg' }))
+    await waitFor(() => expect(m.create).toHaveBeenCalledWith(expect.objectContaining({ url: 'https://rec/x.ogg' })))
     act(() => m.instance.fire('ready', 42))
     fireEvent.click(screen.getByRole('button', { name: '0:01' }))
     expect(m.instance.setTime).toHaveBeenCalledWith(1.2)
     fireEvent.click(screen.getByRole('button', { name: '1.5x' }))
     expect(m.instance.setPlaybackRate).toHaveBeenCalledWith(1.5, true)
+  })
+
+  it('shows a pulsing recording state for an in-progress recording', async () => {
+    get.mockResolvedValue(detail({ call: makeCall({ recording: { status: 'recording', sizeBytes: 0, durationSec: 0 } }) }))
+    render(<CallDrawer callId="c1" onClose={() => {}} />, { wrapper: wrapper(makeQueryClient()) })
+    expect(await screen.findByTestId('audio-recording')).toBeInTheDocument()
+  })
+
+  it('shows the handoff badge with the operator and offers the take-over console for active calls', async () => {
+    useAuth.setState({ user: testUser })
+    get.mockResolvedValue(detail({ call: makeCall({ handoff: 'active', operatorId: testUser.id }) }))
+    post.mockImplementation(async (path: string) => (path.endsWith('/handoff') ? { token: 't', url: 'wss://lk', roomName: 'r', identity: 'op-u1' } : undefined))
+    render(<CallDrawer callId="c1" onClose={() => {}} />, { wrapper: wrapper(makeQueryClient()) })
+    expect(await screen.findByTestId('handoff-badge')).toHaveTextContent('Оператор ярьж байна · Та')
+
+    fireEvent.click(screen.getByRole('button', { name: /Дуудлагад орох/ }))
+    const consoleDialog = await screen.findByRole('dialog', { name: 'Оператор дуудлагад орсон' })
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/calls/c1/handoff'))
+    fireEvent.click(within(consoleDialog).getByRole('button', { name: /Гарах/ }))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/calls/c1/handoff/end'))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Оператор дуудлагад орсон' })).toBeNull())
+    useAuth.setState({ user: null })
+  })
+
+  it('disables take-over when the plan lacks the handoff feature and hides it for finished calls', async () => {
+    get.mockImplementation(async (path: string) => {
+      if (path === '/billing/subscription') return { limits: { features: ['recordings'] } }
+      return detail()
+    })
+    const { unmount } = render(<CallDrawer callId="c1" onClose={() => {}} />, { wrapper: wrapper(makeQueryClient()) })
+    const btn = await screen.findByRole('button', { name: /Дуудлагад орох/ })
+    await waitFor(() => expect(btn).toBeDisabled())
+    unmount()
+
+    get.mockResolvedValue(detail({ call: makeCall({ status: 'completed' }) }))
+    render(<CallDrawer callId="c1" onClose={() => {}} />, { wrapper: wrapper(makeQueryClient()) })
+    await screen.findByText('Бат-Эрдэнэ')
+    expect(screen.queryByRole('button', { name: /Дуудлагад орох/ })).toBeNull()
   })
 
   it('appends live final turns and shows partials + agent state', async () => {

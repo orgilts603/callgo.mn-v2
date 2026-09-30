@@ -23,3 +23,9 @@ Envelope (Go `domain.Event`):
 ### Campaign v2
 - `call.ended` payload adds `"outcome": "agreed|declined|callback|…|"` and `"outcomeNote": "…"` when the call belongs to a campaign with outcomes.
 - `campaign.progress` is also published when a dry-run limit pauses the campaign (`campaign.status == "paused"`, `campaign.dryRunDialed == campaign.dryRunLimit`).
+
+### SaaS additions
+- `call.updated` payload may include `handoff: "requested"|"active"|"ended"`, `operatorId`, `recording: RecordingInfo`.
+- `call.ended` from the agent carries `usage: {llmTokensIn, llmTokensOut, sttSeconds, ttsChars, llmModel}` and optional `callbacks: [{dueAt, note}]`.
+- New event types: `billing.updated` (`{subscription, usage}` — after payments / period rollover), `quota.warning` (`{used, limit, percent}` at 80% and 100% of included minutes), `webhook.failed` (`{webhookId, url}` when auto-disabled), `callback.scheduled` (`{callback}`).
+- Outbound webhooks deliver the same envelope with the headers described in docs/API.md.

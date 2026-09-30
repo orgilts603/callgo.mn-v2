@@ -30,11 +30,26 @@ var (
 
 // Organization is a tenant (a company that bought CallGo.mn).
 type Organization struct {
-	ID        uuid.UUID `json:"id"`
-	Name      string    `json:"name"`
-	Slug      string    `json:"slug"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	Slug string    `json:"slug"`
+	// SaaS fields (see saas.go).
+	PlanCode  string         `json:"planCode"` // denormalised current plan
+	Status    OrgStatus      `json:"status"`   // active | suspended (unpaid) | closed
+	Timezone  string         `json:"timezone"` // default Asia/Ulaanbaatar
+	Settings  map[string]any `json:"settings,omitempty"`
+	CreatedAt time.Time      `json:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt"`
 }
+
+// OrgStatus is the tenancy state of an organisation.
+type OrgStatus string
+
+const (
+	OrgActive    OrgStatus = "active"
+	OrgSuspended OrgStatus = "suspended"
+	OrgClosed    OrgStatus = "closed"
+)
 
 // Role of a user inside an organisation.
 type Role string
@@ -47,14 +62,28 @@ const (
 
 // User is a human who logs into the CRM.
 type User struct {
-	ID           uuid.UUID `json:"id"`
-	OrgID        uuid.UUID `json:"orgId"`
-	Email        string    `json:"email"`
-	Name         string    `json:"name"`
-	Role         Role      `json:"role"`
-	PasswordHash string    `json:"-"`
-	CreatedAt    time.Time `json:"createdAt"`
+	ID              uuid.UUID  `json:"id"`
+	OrgID           uuid.UUID  `json:"orgId"`
+	Email           string     `json:"email"`
+	Name            string     `json:"name"`
+	Role            Role       `json:"role"`
+	PasswordHash    string     `json:"-"`
+	Status          UserStatus `json:"status"` // invited | active | disabled
+	EmailVerifiedAt *time.Time `json:"emailVerifiedAt,omitempty"`
+	LastLoginAt     *time.Time `json:"lastLoginAt,omitempty"`
+	IsPlatformAdmin bool       `json:"isPlatformAdmin"` // CallGo staff: /api/admin
+	CreatedAt       time.Time  `json:"createdAt"`
+	UpdatedAt       time.Time  `json:"updatedAt"`
 }
+
+// UserStatus is the account state of a user.
+type UserStatus string
+
+const (
+	UserInvited  UserStatus = "invited"
+	UserActive   UserStatus = "active"
+	UserDisabled UserStatus = "disabled"
+)
 
 // ===========================================================================
 // Telephony configuration (SIP numbers, agent profiles, LLM configs)
@@ -112,6 +141,8 @@ type AgentProfile struct {
 	// Tools the LLM may call: "end_call", "transfer_call", "lookup_contact", "schedule_callback".
 	Tools          []string `json:"tools"`
 	TransferNumber string   `json:"transferNumber,omitempty"`
+	// PostCallActions run after call.ended (SMS, webhook, callback).
+	PostCallActions []PostCallAction `json:"postCallActions"`
 	// KnowledgeBaseID attaches an org knowledge base (RAG). KnowledgeMode:
 	// "off" (default), "tool" (LLM calls lookup_knowledge on demand) or
 	// "context" (the whole base is inlined into the system prompt; suits
@@ -140,8 +171,11 @@ type SIPNumber struct {
 	AllowInbound     bool       `json:"allowInbound"`
 	AllowOutbound    bool       `json:"allowOutbound"`
 	Active           bool       `json:"active"`
-	CreatedAt        time.Time  `json:"createdAt"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
+	// Routing decides which profile answers inbound calls (business hours,
+	// after-hours message, DTMF menu). Zero value = always AgentProfileID.
+	Routing   RoutingConfig `json:"routing"`
+	CreatedAt time.Time     `json:"createdAt"`
+	UpdatedAt time.Time     `json:"updatedAt"`
 }
 
 // ===========================================================================
@@ -220,7 +254,11 @@ type Call struct {
 	AnsweredAt    *time.Time     `json:"answeredAt,omitempty"`
 	EndedAt       *time.Time     `json:"endedAt,omitempty"`
 	DurationSec   int            `json:"durationSec"`
-	RecordingURL  string         `json:"recordingUrl,omitempty"`
+	RecordingURL  string         `json:"recordingUrl,omitempty"` // API path that redirects to a signed URL
+	Recording     *RecordingInfo `json:"recording,omitempty"`
+	Handoff       HandoffState   `json:"handoff,omitempty"`
+	OperatorID    *uuid.UUID     `json:"operatorId,omitempty"`
+	Usage         *CallUsage     `json:"usage,omitempty"`
 	Summary       string         `json:"summary,omitempty"`
 	Sentiment     Sentiment      `json:"sentiment,omitempty"`
 	Intent        string         `json:"intent,omitempty"`

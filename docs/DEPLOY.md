@@ -33,6 +33,7 @@ troubleshooting), [SIP_FLOW.md](SIP_FLOW.md) (sequence diagrams),
 |---|---|---|---|
 | postgres | `pgvector/pgvector:pg16` | dev, full | CRM database with the `vector` extension for RAG (`callgo`, plus `callgo_test`) |
 | redis | `redis:7.4-alpine` | dev, full | LiveKit bus shared by livekit, livekit-sip, egress |
+| minio (+ minio-init) | `minio/minio` / `minio/mc` | dev, full | S3-compatible store for call recordings (bucket `callgo-recordings`) |
 | livekit | `livekit/livekit-server:v1.13` | dev, full | Rooms / SFU / SIP + agent-dispatch control plane |
 | livekit-sip | `livekit/sip:v1.17` | full | SIP ⇄ LiveKit bridge (talks only to Asterisk) |
 | asterisk | `andrius/asterisk:22.10.1_debian-trixie` | full | Carrier-facing PBX (Asterisk 22 LTS) |
@@ -276,21 +277,77 @@ make lk-setup ARGS=--list
 
 ## 7. Бичлэг / Call recording (optional)
 
+The backend records answered calls itself: on `call.answered` it starts a
+LiveKit **audio-only room-composite egress** (OGG) when the org's plan has the
+`recordings` feature and `org.settings.recordCalls` is not `false`, and stores
+the file in the object store under
+`recordings/<orgId>/<yyyy>/<mm>/<callId>.ogg`. The `egress_ended` webhook marks
+`Call.recording` ready; `Call.recordingUrl = /api/calls/{id}/recording`
+302-redirects to a **10-minute signed URL**. Nothing is publicly listable.
+
 ```bash
-# .env: CALLGO_RECORDING=true   (then)
-make full-up
-make lk-setup ARGS=--recreate    # only for numbers managed by lk-setup: adds room_config.egress
+# .env
+CALLGO_RECORDING=true            # run the egress container (profile "recording")
+CALLGO_RECORDINGS=true           # backend starts egress on call.answered
+CALLGO_RECORDINGS_DRIVER=s3      # s3 (MinIO/AWS/R2) | local
+make full-up                     # full + recording profiles; MinIO is in dev/full
 ```
-* Egress writes `/out/recordings/<room>-<time>.ogg` to the `recordings`
-  volume; the frontend nginx serves it at `/recordings/<file>`.
-* When the room ends LiveKit sends `egress_ended` to `POST /api/livekit/webhook`;
-  the backend stores `EgressInfo.file_results[0].location` as
-  `Call.recordingUrl` (a local `/out/recordings/x.ogg` becomes `/recordings/x.ogg`),
-  and `GET /api/calls/{id}/recording` redirects to it.
-* Production: configure `storage.s3` in [`infra/egress/egress.yaml`](../infra/egress/egress.yaml)
-  (AWS S3, MinIO, R2) so recordings are not publicly guessable URLs on the VPS.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `CALLGO_RECORDINGS` | `true` | Master switch of backend-driven recording |
+| `CALLGO_RECORDINGS_DRIVER` | `s3` | `s3` or `local` |
+| `S3_ENDPOINT` | `localhost:9000` (compose: `minio:9000` via `S3_DOCKER_ENDPOINT`) | S3 API host[:port] used by the backend |
+| `S3_EGRESS_ENDPOINT` | `http://minio:9000` | Endpoint (with scheme) the egress container uploads to |
+| `S3_PUBLIC_URL` | `http://localhost:9000` | Browser-facing base URL presigned links are signed for |
+| `S3_BUCKET` | `callgo-recordings` | Bucket (created by `minio-init` / `EnsureBucket`) |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | `callgo-minio` / … | Credentials (MinIO root user in compose — change in prod) |
+| `S3_REGION` | `us-east-1` | Region |
+| `S3_USE_SSL` | `false` | HTTPS towards `S3_ENDPOINT` |
+| `CALLGO_RECORDINGS_DIR` | `./data/recordings` (compose `/data/recordings`) | Local driver root = where egress writes `/out/recordings` |
+| `CALLGO_RECORDING_RETENTION_DAYS` | `90` | Default retention; per org `settings.recordingRetentionDays` |
+| `LIVEKIT_PUBLIC_URL` | `ws://localhost:7880` | Browser LiveKit URL for operator handoff (`GET /api/livekit/config`) |
+
+**S3 / MinIO (recommended).** The backend passes the S3 target with every
+egress request, so `infra/egress/egress.yaml` needs no credentials. Browsers
+fetch recordings from `S3_PUBLIC_URL`, so in production publish MinIO's API
+through Caddy with TLS, e.g.
+
+```
+s3.crm.example.mn {
+    reverse_proxy minio:9000
+}
+```
+
+and set `S3_PUBLIC_URL=https://s3.crm.example.mn`. The MinIO console (`:9001`)
+stays on loopback (`ssh -L 9001:127.0.0.1:9001 user@vps`). For AWS S3 / R2 set
+`S3_DOCKER_ENDPOINT` + `S3_EGRESS_ENDPOINT` + `S3_PUBLIC_URL` to the provider
+endpoint, `S3_USE_SSL=true`, and drop the `minio` services if unused.
+
+**Local driver (dev / single host).** Egress writes `/out/recordings/<key>` to
+the `recordings` volume, mounted in the backend at `/data`
+(`CALLGO_RECORDINGS_DIR=/data/recordings`). The API serves the files at
+`/api/recordings/file/<key>?exp=&sig=` (HMAC-SHA256 signed, expiring links;
+Range requests supported for seeking). With `make dev` (backend on the host)
+use the `s3` driver — the egress container cannot write to a host directory
+unless you bind-mount it.
+
+**Retention.** A nightly job deletes objects older than the org's retention
+and marks `recording.status = deleted`. Owners/admins can delete a single
+recording with `DELETE /api/calls/{id}/recording`.
+
+**Notes**
+* Do not combine backend recordings with `make lk-setup` auto egress
+  (`room_config.egress`, `CALLGO_RECORDING=true` in lk-setup): calls would be
+  recorded twice.
+* The frontend nginx still mounts the `recordings` volume at `/recordings/`
+  for legacy egress files; with the `local` driver remove that mount so files
+  are only reachable through signed links.
 * Asterisk can additionally keep a PBX-side WAV archive (`ASTERISK_RECORD_CALLS=yes`,
   volume `asterisk-spool`, `/var/spool/asterisk/monitor`).
+* Ports: MinIO `9000` (API) and `9001` (console) are published on loopback
+  only (`MINIO_API_PUBLISH`, `MINIO_CONSOLE_PUBLISH`); never open them in the
+  firewall — expose the API through Caddy.
 
 ---
 

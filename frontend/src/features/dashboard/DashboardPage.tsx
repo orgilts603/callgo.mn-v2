@@ -33,7 +33,7 @@ export default function DashboardPage() {
             <Button variant="ghost" size="sm" onClick={refresh} aria-label="Шинэчлэх" disabled={refreshing}>
               <RefreshCw className={refreshing ? 'animate-spin' : undefined} /> Шинэчлэх
             </Button>
-            <Link to="/live" className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--accent)] px-2.5 text-xs font-medium text-white shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--accent-hover)]">
+            <Link to="/live" className="inline-flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] bg-[var(--accent)] px-2.5 text-xs font-medium text-[var(--fg-on-accent)] shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--accent-hover)]">
               <Radio className="h-3.5 w-3.5" /> Live Desk
             </Link>
           </>

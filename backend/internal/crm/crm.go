@@ -185,6 +185,9 @@ type querier interface {
 type Store struct {
 	db     querier
 	cipher *keyCipher
+	// plans resolves plan codes for SummarizeUsage (see SetPlanLookup in
+	// billing.go); nil means DefaultPlanLookup.
+	plans PlanLookup
 }
 
 // New wraps a pool. encryptionKey protects LLM API keys at rest with
@@ -202,7 +205,7 @@ func (s *Store) inTx(ctx context.Context, fn func(tx *Store) error) error {
 		return fmt.Errorf("crm: begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if err := fn(&Store{db: tx, cipher: s.cipher}); err != nil {
+	if err := fn(&Store{db: tx, cipher: s.cipher, plans: s.plans}); err != nil {
 		return err
 	}
 	if err := tx.Commit(ctx); err != nil {

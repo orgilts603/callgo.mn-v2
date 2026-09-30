@@ -49,6 +49,11 @@ func (s *server) livekitWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleWebhook(ctx context.Context, ev *livekit.WebhookEvent) error {
+	if s.d.EgressWebhook != nil {
+		if handled, err := s.d.EgressWebhook(ctx, ev); handled {
+			return err
+		}
+	}
 	switch ev.GetEvent() {
 	case webhook.EventRoomStarted:
 		return s.onRoomStarted(ctx, ev.GetRoom())

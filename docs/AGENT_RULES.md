@@ -33,3 +33,22 @@ Follow these rules strictly or you will break someone else's build.
    signatures, env vars, routes to mount), and any contract mismatch.
 10. Keep going until your scope is complete and its tests pass. Do not ask
     questions; make the sensible decision and document it.
+
+## httpapi conventions for parallel feature agents (SaaS sprint)
+
+Several agents add routes to `backend/internal/httpapi` at once. To avoid
+conflicts:
+- Put your handlers in your own files (`identity.go`, `billing.go`, …) and
+  your own `<feature>Deps` struct in that file. Expose
+  `func mount<Feature>(r chi.Router, d *Deps, cfg Config, log zerolog.Logger)`.
+- Do NOT edit `deps.go`, `server.go`, `fakes_test.go` or `helpers_test.go`.
+  Add ONE field to `Deps` only via a tiny file `deps_<feature>.go`? No — Go
+  cannot split a struct. Instead the integrator adds `Deps.<Feature> <Feature>Deps`
+  and the `mount<Feature>` call in `server.go`. Write your tests to construct
+  your handlers through `mount<Feature>` on a fresh `chi.NewRouter()` with
+  your own fakes in `<feature>_fakes_test.go`, using `auth.WithClaims` /
+  `auth.RequireAuth` directly.
+- Shared helpers you may call live in `respond.go` (`writeJSON`, `writeError`, `decodeJSON`, `claimsOf`, …) — read that file first and reuse them.
+- Every mutating handler calls `audit(ctx, d, action, targetType, targetID, meta)`;
+  the integrator provides `Deps.Audit AuditWriter` (interface in your file is fine:
+  `type AuditWriter interface{ Append(ctx, e *domain.AuditEntry) error }`).

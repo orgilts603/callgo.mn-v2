@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -9,9 +9,11 @@ import pytest
 from callgo_agent.events import EventEmitter
 from callgo_agent.schemas import (
     Call,
+    CallbackIntent,
     CallDirection,
     CallEndedPayload,
     CallStatus,
+    CallUsage,
     Event,
     Sentiment,
     Speaker,
@@ -237,3 +239,46 @@ async def test_emitter_without_call_id() -> None:
     em.system("hello")
     await em.flush()
     assert sink.events[0].call_id is None
+
+
+async def test_call_ended_with_usage_and_callbacks() -> None:
+    em = make(FakeSink())
+    due = datetime(2026, 10, 1, 2, 0, tzinfo=UTC)
+    ev = em.call_ended(
+        CallEndedPayload(end_reason="after_hours", duration_sec=4),
+        usage=CallUsage(
+            llm_tokens_in=10, llm_tokens_out=2, stt_seconds=1.5, tts_chars=40, cost_mnt=3
+        ),
+        callbacks=[CallbackIntent(due_at=due, note="үнэ")],
+    )
+    assert ev is not None
+    assert ev.payload["endReason"] == "after_hours"
+    assert ev.payload["usage"] == {
+        "llmTokensIn": 10,
+        "llmTokensOut": 2,
+        "sttSeconds": 1.5,
+        "ttsChars": 40,
+        "llmModel": "",
+        "costMnt": 3,
+    }
+    assert ev.payload["callbacks"] == [{"dueAt": "2026-10-01T02:00:00Z", "note": "үнэ"}]
+
+    plain = em.call_ended(CallEndedPayload(), callbacks=[])
+    assert plain is not None
+    assert "usage" not in plain.payload and "callbacks" not in plain.payload
+
+
+async def test_call_handoff_payloads() -> None:
+    sink = FakeSink()
+    em = make(sink)
+    em.call_handoff("requested")
+    em.call_handoff("active", "user-1")
+    em.call_handoff("ended")
+    em.agent_state("handoff", "google/x")
+    await em.flush()
+    assert [(e.type, e.payload) for e in sink.events] == [
+        ("call.updated", {"handoff": "requested"}),
+        ("call.updated", {"handoff": "active", "operatorId": "user-1"}),
+        ("call.updated", {"handoff": "ended"}),
+        ("agent.state", {"state": "handoff", "llmModel": "google/x"}),
+    ]

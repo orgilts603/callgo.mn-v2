@@ -21,10 +21,10 @@ const FALLBACK_PROVIDERS: LLMCatalogEntry[] = [
 const providerStyle: Record<LLMProvider, { initial: string; cls: string }> = {
   openai: { initial: 'O', cls: 'bg-emerald-500/15 text-emerald-300' },
   anthropic: { initial: 'A', cls: 'bg-orange-500/15 text-orange-300' },
-  google: { initial: 'G', cls: 'bg-sky-500/15 text-sky-300' },
+  google: { initial: 'G', cls: 'bg-white/[0.06] text-zinc-200' },
   groq: { initial: 'Q', cls: 'bg-fuchsia-500/15 text-fuchsia-300' },
   ollama: { initial: 'L', cls: 'bg-zinc-500/20 text-zinc-200' },
-  openai_compatible: { initial: '⚙', cls: 'bg-violet-500/15 text-violet-300' },
+  openai_compatible: { initial: '⚙', cls: 'bg-white/[0.06] text-zinc-300' },
 }
 function ProviderLogo({ provider, className }: { provider: LLMProvider; className?: string }) {
   const s = providerStyle[provider] ?? { initial: '?', cls: 'bg-[var(--surface-2)]' }

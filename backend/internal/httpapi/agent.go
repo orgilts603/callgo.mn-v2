@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/domain"
+	"github.com/orgilts603/callgo.mn-v2/backend/internal/routing"
 )
 
 const (
@@ -60,6 +61,19 @@ type bootstrapResponse struct {
 	Contact      *domain.Contact      `json:"contact"`
 	Campaign     *campaignInfo        `json:"campaign"`
 	Knowledge    *knowledgeInfo       `json:"knowledge"`
+	// Route is the inbound routing decision (nil for outbound calls).
+	Route        *domain.ResolvedRoute `json:"route"`
+	Entitlements bootstrapEntitlements `json:"entitlements"`
+	Handoff      bootstrapHandoff      `json:"handoff"`
+}
+
+type bootstrapEntitlements struct {
+	CanStart bool   `json:"canStart"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type bootstrapHandoff struct {
+	Enabled bool `json:"enabled"`
 }
 
 func (s *server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +93,13 @@ func (s *server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	to, _ := normalizePhone(q.Get("to"))
 	sipNum := strings.TrimSpace(q.Get("sipNumber"))
 	direction := domain.CallDirection(q.Get("direction"))
+	// profileId overrides the profile (DTMF menu choice: the agent re-runs
+	// bootstrap with the chosen option's profile).
+	profileOverride, err := parseOptUUID(q.Get("profileId"), "profileId")
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
 
 	var call *domain.Call
 	if callID != nil {
@@ -185,6 +206,32 @@ func (s *server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Inbound routing (business hours / after-hours / DTMF menu) picks the
+	// profile of an inbound call; an explicit profileId (menu choice) wins.
+	var route *domain.ResolvedRoute
+	if call.Direction == domain.DirectionInbound && num != nil && profileOverride == nil {
+		rr, pid := routing.ForNumber(num, org, s.now())
+		route = &rr
+		if pid != nil {
+			call.AgentProfileID, changed = pid, true
+		}
+	}
+	if profileOverride != nil {
+		p, err := s.d.AgentProfile.GetAgentProfile(ctx, *profileOverride)
+		if err != nil && !errors.Is(err, domain.ErrNotFound) {
+			s.writeErr(w, r, fmt.Errorf("get agent profile: %w", err))
+			return
+		}
+		if p == nil || p.OrgID != call.OrgID {
+			s.writeErr(w, r, errNotFound("agent profile"))
+			return
+		}
+		if call.AgentProfileID == nil || *call.AgentProfileID != p.ID {
+			call.AgentProfileID, changed = &p.ID, true
+		}
+		route = &domain.ResolvedRoute{Mode: "direct", AgentProfileID: &p.ID}
+	}
+
 	// Agent profile: call → SIP number → campaign → first profile of the org.
 	profile, err := s.resolveProfile(ctx, call, num, camp)
 	if err != nil {
@@ -193,6 +240,25 @@ func (s *server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	}
 	if call.AgentProfileID == nil && profile.ID != uuid.Nil {
 		call.AgentProfileID, changed = &profile.ID, true
+	}
+	if route != nil && route.AgentProfileID == nil && route.Mode != "menu" {
+		route.AgentProfileID = &profile.ID
+	}
+
+	ent := bootstrapEntitlements{CanStart: true}
+	if s.d.Entitlements != nil {
+		ok, reason, err := s.d.Entitlements.CanStartCall(ctx, call.OrgID)
+		if err != nil {
+			s.log.Warn().Err(err).Str("org", call.OrgID.String()).Msg("bootstrap: entitlement check failed")
+		} else {
+			ent = bootstrapEntitlements{CanStart: ok, Reason: reason}
+		}
+	}
+	handoff := bootstrapHandoff{Enabled: true}
+	if s.d.Entitlements != nil {
+		if ok, err := s.d.Entitlements.HasFeature(ctx, call.OrgID, "handoff"); err == nil {
+			handoff.Enabled = ok
+		}
 	}
 
 	if profile.KnowledgeMode == "" {
@@ -245,7 +311,7 @@ func (s *server) agentBootstrap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, bootstrapResponse{
 		Call: call, Org: org, SIPNumber: num, Profile: profile,
 		LLM: withKey(llm), LLMFallbacks: fallbacks, Lexicon: lex, Contact: contact, Campaign: campInfo,
-		Knowledge: knowledge,
+		Knowledge: knowledge, Route: route, Entitlements: ent, Handoff: handoff,
 	})
 }
 
@@ -401,6 +467,23 @@ type callEndedPayload struct {
 	// "absent" from "empty".
 	Outcome     *string `json:"outcome"`
 	OutcomeNote *string `json:"outcomeNote"`
+	// Usage is the worker's provider usage (metering).
+	Usage *domain.CallUsage `json:"usage"`
+	// Callbacks are callbacks the customer asked for during the call.
+	Callbacks []callbackIntent `json:"callbacks"`
+}
+
+// callbackIntent is a callback requested during the call (docs/EVENTS.md).
+type callbackIntent struct {
+	DueAt time.Time `json:"dueAt"`
+	Note  string    `json:"note"`
+	Phone string    `json:"phone"`
+}
+
+// callUpdatedPayload is the agent's call.updated event (handoff state).
+type callUpdatedPayload struct {
+	Handoff    *domain.HandoffState `json:"handoff"`
+	OperatorID *uuid.UUID           `json:"operatorId"`
 }
 
 // ingestState caches per-request lookups.
@@ -531,11 +614,48 @@ func (s *server) ingestEvent(ctx context.Context, st *ingestState, ev agentEvent
 			o.HasOutcome = true
 			o.Outcome, o.OutcomeNote = cleanOutcome(code, note)
 		}
+		if p.Usage != nil {
+			call.Usage = p.Usage
+		}
 		// finalizeCall stores the outcome on the call before notifying the
 		// campaign engine (OnCallEnded), which copies it onto the target.
 		if _, err := s.finalizeCall(ctx, call, o); err != nil {
 			return false, err
 		}
+		s.scheduleRequestedCallbacks(ctx, call, p.Callbacks)
+		return true, nil
+
+	case domain.EventCallUpdated:
+		var p callUpdatedPayload
+		if len(ev.Payload) > 0 {
+			if err := json.Unmarshal(ev.Payload, &p); err != nil {
+				return false, nil
+			}
+		}
+		if p.Handoff != nil {
+			switch *p.Handoff {
+			case domain.HandoffNone, domain.HandoffRequested, domain.HandoffActive, domain.HandoffEnded:
+			default:
+				return false, nil
+			}
+			call.Handoff = *p.Handoff
+			if p.OperatorID != nil {
+				call.OperatorID = p.OperatorID
+			}
+			if s.d.SetHandoff != nil {
+				if err := s.d.SetHandoff(ctx, call.ID, call.Handoff, call.OperatorID); err != nil {
+					return false, fmt.Errorf("set handoff: %w", err)
+				}
+			} else {
+				call.UpdatedAt = s.now()
+				if err := s.d.Call.UpdateCall(ctx, call); err != nil {
+					return false, fmt.Errorf("update call: %w", err)
+				}
+			}
+		}
+		snap := *call
+		out.Payload = map[string]any{"call": &snap, "handoff": call.Handoff, "operatorId": call.OperatorID}
+		s.publishEvent(ctx, out)
 		return true, nil
 
 	case domain.EventAgentState, domain.EventTranscriptPartial:
@@ -547,7 +667,7 @@ func (s *server) ingestEvent(ctx context.Context, st *ingestState, ev agentEvent
 		s.publishEvent(ctx, out)
 		return true, nil
 
-	case domain.EventCallStarted, domain.EventCallRinging, domain.EventCallUpdated:
+	case domain.EventCallStarted, domain.EventCallRinging:
 		snap := *call
 		out.Payload = map[string]any{"call": &snap}
 		s.publishEvent(ctx, out)
@@ -637,4 +757,37 @@ func (s *server) agentLexiconHit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	noContent(w)
+}
+
+// scheduleRequestedCallbacks creates the callbacks the agent reported in
+// call.ended. Failures are logged; they never fail the event.
+func (s *server) scheduleRequestedCallbacks(ctx context.Context, call *domain.Call, intents []callbackIntent) {
+	if s.d.CreateCallback == nil || len(intents) == 0 {
+		return
+	}
+	for _, in := range intents {
+		phone := in.Phone
+		if phone == "" {
+			phone = call.ToNumber
+			if call.Direction == domain.DirectionInbound {
+				phone = call.FromNumber
+			}
+		}
+		if phone == "" || in.DueAt.IsZero() {
+			continue
+		}
+		cb := &domain.CallbackRequest{
+			OrgID:          call.OrgID,
+			SourceCallID:   &call.ID,
+			ContactID:      call.ContactID,
+			Phone:          phone,
+			Note:           strings.TrimSpace(in.Note),
+			DueAt:          in.DueAt.UTC(),
+			SIPNumberID:    call.SIPNumberID,
+			AgentProfileID: call.AgentProfileID,
+		}
+		if err := s.d.CreateCallback(ctx, cb); err != nil {
+			s.log.Warn().Err(err).Str("call", call.ID.String()).Msg("agent-requested callback not scheduled")
+		}
+	}
 }

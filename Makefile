@@ -22,7 +22,7 @@ export CALLGO_TEST_DATABASE_URL
 
 .PHONY: help env dev dev-up full-up \
         compose-up compose-down compose-logs compose-ps compose-build compose-config \
-        backend-test agent-test frontend-test test lint infra-check \
+        backend-test agent-test frontend-test test lint infra-check ci e2e \
         migrate models third-party lk-setup sip-test-call
 
 help: ## Show this help
@@ -82,6 +82,18 @@ frontend-test: ## vitest run for the frontend
 	cd $(ROOT)/frontend && pnpm exec vitest run
 
 test: backend-test agent-test frontend-test ## Run every test suite
+
+ci: ## What CI runs: go vet + go test -race, frontend tsc + vitest, agent ruff + pytest
+	cd $(ROOT)/backend && go vet ./... && go test -race -count=1 ./...
+	cd $(ROOT)/frontend && pnpm exec tsc --noEmit -p tsconfig.app.json && pnpm exec vitest run
+	cd $(ROOT)/agent && if [ -x .venv/bin/pytest ]; then .venv/bin/ruff check callgo_agent tests && .venv/bin/pytest -q; else uv run --extra dev ruff check callgo_agent tests && uv run --extra dev pytest -q; fi
+
+# E2E_BASE_URL is where the dashboard is served (default: `make dev` on :5173); the
+# backend behind it must run with CALLGO_SIMULATOR=true. See docs/CI.md.
+E2E_BASE_URL ?= http://127.0.0.1:5173
+e2e: ## Playwright smoke tests against a running stack (E2E_BASE_URL, CALLGO_E2E_CHROME optional)
+	cd $(ROOT)/frontend/e2e && if [ ! -d node_modules ]; then npm ci; fi
+	cd $(ROOT)/frontend/e2e && E2E_BASE_URL=$(E2E_BASE_URL) npx playwright test -c ../playwright.config.ts $(ARGS)
 
 lint: infra-check ## go vet + gofmt, ruff, oxlint + tsc, infra config checks
 	cd $(ROOT)/backend && go vet ./... && test -z "$$(gofmt -l . | tee /dev/stderr)"

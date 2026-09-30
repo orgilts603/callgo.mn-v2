@@ -6,7 +6,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentProfile, LLMCatalogEntry, LLMConfig, SIPNumber } from '@/lib/types'
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
-vi.mock('@/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() } }))
+vi.mock('@/lib/api', async (orig) => ({
+  ...(await orig<typeof import('@/lib/api')>()),
+  api: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
+}))
 
 import { api } from '@/lib/api'
 import { LLMConfigDialog } from './LLMConfigsTab'
@@ -121,7 +124,7 @@ describe('SIPNumberDialog', () => {
 
   it('sends switches state on edit including active', async () => {
     mocked.put.mockResolvedValue({ sipNumber: {} })
-    const n: SIPNumber = { id: 's1', orgId: 'o', number: '+97670001234', label: 'Main', allowInbound: true, allowOutbound: true, active: true, createdAt: '', updatedAt: '' }
+    const n: SIPNumber = { id: 's1', orgId: 'o', number: '+97670001234', label: 'Main', allowInbound: true, allowOutbound: true, active: true, routing: { businessHours: { timezone: '', weekdays: [], startTime: '', endTime: '', pacePerMinute: 0 }, afterHoursMessage: '', menuPrompt: '', menu: [], menuTimeoutSec: 8, menuRepeat: 1 }, createdAt: '', updatedAt: '' }
     wrap(<SIPNumberDialog open onClose={vi.fn()} initial={n} profiles={[]} />)
     fireEvent.click(screen.getByRole('switch', { name: 'Явах дуудлага' }))
     fireEvent.click(screen.getByRole('switch', { name: 'Идэвхтэй' }))

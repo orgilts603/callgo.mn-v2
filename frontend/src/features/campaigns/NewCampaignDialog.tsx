@@ -58,7 +58,7 @@ function Stepper({ step }: { step: number }) {
       {STEPS.map((label, i) => (
         <li key={label} className="flex items-center gap-2">
           <span className={cn('flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-semibold',
-            i + 1 === step ? 'border-[var(--accent)] bg-[var(--accent)] text-white'
+            i + 1 === step ? 'border-[var(--accent)] bg-[var(--accent)] text-[var(--fg-on-accent)]'
               : i + 1 < step ? 'border-emerald-500/50 text-emerald-400' : 'border-[var(--border)] text-[var(--fg-subtle)]')}>{i + 1}</span>
           <span className={i + 1 === step ? 'font-medium text-[var(--fg)]' : 'text-[var(--fg-muted)]'}>{label}</span>
           {i < STEPS.length - 1 && <span className="h-px w-6 bg-[var(--border)]" />}

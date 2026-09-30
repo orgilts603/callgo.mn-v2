@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/domain"
 )
@@ -24,10 +25,13 @@ const (
 - Яриа дуусахад талархал илэрхийлж, эелдэгээр салах ёс гүйцэтгэ.`
 	demoAdminName = "Admin"
 	demoSeedLock  = "callgo.crm.seed_demo"
+	demoTrialDays = 14
 )
 
-// SeedDemo idempotently ensures the demo tenant: the "demo" organisation, an
-// owner user (adminEmail / passwordHash; an existing user is left untouched),
+// SeedDemo idempotently ensures the demo tenant: the "demo" organisation (plan
+// trial) with a 14-day trialing subscription, an owner user (adminEmail /
+// passwordHash, active, e-mail verified, platform admin; an existing user is
+// left untouched),
 // a "Default Assistant" agent profile and the demo SIP number +97670001234
 // bound to it. Concurrent callers are serialised with an advisory lock.
 func (s *Store) SeedDemo(ctx context.Context, adminEmail, passwordHash string) (*domain.Organization, error) {
@@ -47,12 +51,18 @@ func (s *Store) SeedDemo(ctx context.Context, adminEmail, passwordHash string) (
 		org = o
 
 		if _, err := tx.GetUserByEmail(ctx, adminEmail); errors.Is(err, domain.ErrNotFound) {
+			verified := time.Now()
 			u := &domain.User{OrgID: o.ID, Email: adminEmail, Name: demoAdminName, Role: domain.RoleOwner,
-				PasswordHash: passwordHash}
+				PasswordHash: passwordHash, Status: domain.UserActive, EmailVerifiedAt: &verified,
+				IsPlatformAdmin: true}
 			if err := tx.CreateUser(ctx, u); err != nil {
 				return err
 			}
 		} else if err != nil {
+			return err
+		}
+
+		if err := tx.ensureDemoSubscription(ctx, o); err != nil {
 			return err
 		}
 
@@ -80,6 +90,17 @@ func (s *Store) SeedDemo(ctx context.Context, adminEmail, passwordHash string) (
 		return nil, err
 	}
 	return org, nil
+}
+
+// ensureDemoSubscription gives the demo org a 14-day trialing subscription
+// on its plan (trial) unless it already has one.
+func (s *Store) ensureDemoSubscription(ctx context.Context, o *domain.Organization) error {
+	_, err := s.db.Exec(ctx,
+		`INSERT INTO subscriptions (org_id, plan_code, status, current_period_start, current_period_end, trial_ends_at)
+		 VALUES ($1, $2, $3, now(), now() + $4 * interval '1 day', now() + $4 * interval '1 day')
+		 ON CONFLICT (org_id) DO NOTHING`,
+		o.ID, o.PlanCode, string(domain.SubTrialing), demoTrialDays)
+	return dbErr("seed demo: subscription", err)
 }
 
 func (s *Store) demoProfile(ctx context.Context, o *domain.Organization) (*domain.AgentProfile, error) {

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ChevronDown, LogOut, Moon, Settings, Sun } from 'lucide-react'
-import { roleLabel, useAuth } from '@/app/auth'
+import { BadgeCheck, ChevronDown, LogOut, MailWarning, Moon, Settings, Sun } from 'lucide-react'
+import { toast } from 'sonner'
+import { resendVerification, roleLabel, useAuth } from '@/app/auth'
 import { useUI } from '@/app/ui'
 import { cn } from '@/lib/utils'
 
@@ -42,6 +43,13 @@ export function UserMenu() {
   }, [open])
 
   const name = user?.name || user?.email || 'Хэрэглэгч'
+  const unverified = !!user && !user.emailVerifiedAt
+  const resend = () => {
+    setOpen(false)
+    resendVerification()
+      .then(() => toast.success('Баталгаажуулах и-мэйлийг дахин илгээлээ.'))
+      .catch(() => toast.error('И-мэйл илгээж чадсангүй. Дараа дахин оролдоно уу.'))
+  }
   return (
     <div ref={root} className="relative">
       <button
@@ -52,8 +60,12 @@ export function UserMenu() {
         aria-label="Хэрэглэгчийн цэс"
         className="flex h-8 items-center gap-2 rounded-[var(--radius-sm)] pl-1 pr-1.5 transition-colors hover:bg-[var(--surface-2)]"
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[10.5px] font-semibold text-[var(--accent-fg)] ring-1 ring-[var(--accent-border)]">
+        <span className="relative flex h-6 w-6 items-center justify-center rounded-full bg-[var(--accent-soft)] text-[10.5px] font-semibold text-[var(--accent-fg)] ring-1 ring-[var(--accent-border)]">
           {initials(name)}
+          {unverified && (
+            <span data-testid="unverified-dot" title="И-мэйл баталгаажаагүй"
+              className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-[var(--warning)] ring-2 ring-[var(--surface-0)]" />
+          )}
         </span>
         <span className="hidden max-w-[140px] text-left leading-tight lg:block">
           <span className="block truncate text-[12.5px] font-medium text-[var(--fg)]">{name}</span>
@@ -72,8 +84,22 @@ export function UserMenu() {
               <span className="rounded border border-[var(--border)] px-1.5 py-px">{roleLabel(user?.role) || '—'}</span>
               {org && <span className="truncate">{org.name}</span>}
             </div>
+            {user && (unverified ? (
+              <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--warning-fg)]">
+                <MailWarning className="h-3.5 w-3.5" /> И-мэйл баталгаажаагүй
+              </div>
+            ) : (
+              <div className="mt-2 flex items-center gap-1.5 text-[11px] text-[var(--success-fg)]">
+                <BadgeCheck className="h-3.5 w-3.5" /> И-мэйл баталгаажсан
+              </div>
+            ))}
           </div>
           <div className="my-1 border-t border-[var(--border-subtle)]" />
+          {unverified && (
+            <button type="button" role="menuitem" className={cn(itemCls, 'text-[var(--warning-fg)]')} onClick={resend}>
+              <MailWarning className="h-4 w-4" /> И-мэйл баталгаажуулах
+            </button>
+          )}
           <button type="button" role="menuitem" className={itemCls} onClick={() => { setOpen(false); navigate('/settings') }}>
             <Settings className="h-4 w-4" /> Тохиргоо
           </button>

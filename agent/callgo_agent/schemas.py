@@ -72,7 +72,7 @@ class LexiconScope(str, Enum):
     BOTH = "both"
 
 
-AgentState = Literal["initializing", "listening", "thinking", "speaking", "idle"]
+AgentState = Literal["initializing", "listening", "thinking", "speaking", "idle", "handoff"]
 EndReason = Literal[
     "hangup_customer",
     "hangup_agent",
@@ -82,6 +82,8 @@ EndReason = Literal[
     "max_duration",
     "transferred",
     "voicemail",
+    "after_hours",
+    "quota_exceeded",
 ]
 
 
@@ -89,6 +91,10 @@ class Organization(CamelModel):
     id: UUID
     name: str
     slug: str
+    plan_code: str = ""
+    status: str = "active"
+    timezone: str = "Asia/Ulaanbaatar"
+    settings: dict[str, Any] = Field(default_factory=dict)
 
 
 class LLMConfig(CamelModel):
@@ -144,6 +150,7 @@ class AgentProfile(CamelModel):
     transfer_number: str = ""
     knowledge_base_id: UUID | None = None
     knowledge_mode: KnowledgeMode = "off"
+    post_call_actions: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SIPNumber(CamelModel):
@@ -189,6 +196,7 @@ class Call(CamelModel):
     outcome: str = ""
     outcome_note: str = ""
     llm_model_used: str = ""
+    usage: CallUsage | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -230,6 +238,49 @@ class CampaignInfo(CamelModel):
     outcomes: list[CampaignOutcome] = Field(default_factory=list)
 
 
+class MenuOption(CamelModel):
+    key: str
+    label: str = ""
+    agent_profile_id: UUID
+
+
+class ResolvedRoute(CamelModel):
+    """Inbound routing decision for this call (see docs/API.md, Inbound routing)."""
+
+    mode: Literal["direct", "after_hours", "menu"] = "direct"
+    agent_profile_id: UUID | None = None
+    message: str = ""
+    menu_prompt: str = ""
+    menu: list[MenuOption] = Field(default_factory=list)
+    menu_timeout_sec: int = 8
+    menu_repeat: int = 1
+
+
+class EntitlementInfo(CamelModel):
+    can_start: bool = True
+    reason: str = ""
+
+
+class HandoffInfo(CamelModel):
+    enabled: bool = False
+
+
+class CallUsage(CamelModel):
+    """Per-call metering reported in call.ended."""
+
+    llm_tokens_in: int = 0
+    llm_tokens_out: int = 0
+    stt_seconds: float = 0.0
+    tts_chars: int = 0
+    llm_model: str = ""
+    cost_mnt: int = 0
+
+
+class CallbackIntent(CamelModel):
+    due_at: datetime
+    note: str = ""
+
+
 class Bootstrap(CamelModel):
     """Response of GET /internal/agent/bootstrap."""
 
@@ -243,6 +294,9 @@ class Bootstrap(CamelModel):
     contact: Contact | None = None
     campaign: CampaignInfo | None = None
     knowledge: KnowledgeInfo | None = None
+    route: ResolvedRoute | None = None
+    entitlements: EntitlementInfo = Field(default_factory=EntitlementInfo)
+    handoff: HandoffInfo = Field(default_factory=HandoffInfo)
 
 
 # ---- live events ------------------------------------------------------------
@@ -259,6 +313,10 @@ EventType = Literal[
     "campaign.progress",
     "lexicon.updated",
     "system",
+    "billing.updated",
+    "quota.warning",
+    "webhook.failed",
+    "callback.scheduled",
 ]
 
 
@@ -286,6 +344,10 @@ class CallEndedPayload(CamelModel):
     # defines no outcomes / the call was not a campaign call.
     outcome: str = ""
     outcome_note: str = ""
+    # SaaS: provider usage for metering and callbacks the customer asked for
+    # (docs/EVENTS.md "call.ended").
+    usage: CallUsage | None = None
+    callbacks: list[CallbackIntent] = Field(default_factory=list)
 
 
 class JobMetadata(CamelModel):
