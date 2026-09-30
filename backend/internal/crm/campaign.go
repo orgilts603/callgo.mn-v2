@@ -260,4 +260,3 @@ func (s *Store) CountPendingTargets(ctx context.Context, campaignID uuid.UUID) (
 		`SELECT count(*) FROM campaign_targets WHERE campaign_id = $1 AND status = 'pending'`, campaignID).Scan(&n)
 	return n, dbErr("count pending targets", err)
 }
-

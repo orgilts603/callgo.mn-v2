@@ -69,6 +69,9 @@ def _unicode(m: re.Match[str]) -> str:
     for ch in s:
         if ch in _ZERO_WIDTH:
             continue
+        if ch == "\u2212":
+            out.append("-")
+            continue
         if ch.isspace():
             out.append(" " if ch not in "\n\r" else ch)
         elif ch.isdecimal() and not ch.isascii():
@@ -144,7 +147,10 @@ _SUFFIX = r"(?:-([а-яөүё]{1,4}))?"
 
 
 def _abbr(m: re.Match[str]) -> str:
-    return ABBREVIATIONS[m.group(1)] + (m.group(2) or "")
+    stem, suffix = ABBREVIATIONS[m.group(1)], m.group(2) or ""
+    if stem.endswith("и") and suffix.startswith("и"):
+        stem = stem[:-1]
+    return stem + suffix
 
 
 def _dotted(m: re.Match[str]) -> str:
@@ -333,7 +339,7 @@ TTS_RULES: list[Rule] = [
     _r("date_md", r"(?<![0-9.\-/])([0-9]{1,2})/([0-9]{1,2})(?![0-9./\-])", _date_md),
     _r("phone_intl", rf"(?<![\w+])\+[ ]?976[ -]?[0-9]{{4}}[ -]?[0-9]{{4}}{_PHONE_GUARD}", _phone),
     _r("phone_plus", rf"(?<![\w+])\+[0-9]{{1,3}}(?:[ -]?[0-9]{{2,4}}){{2,4}}{_PHONE_GUARD}", _phone),
-    _r("phone_group", rf"(?<![0-9.,\-])(?:[6-9]|11)[0-9]{{2}}[ -][0-9]{{4}}{_PHONE_GUARD}", _phone),
+    _r("phone_group", rf"(?<![0-9.,\-])(?:[6-9][0-9]{{3}}|11[0-9]{{2}})[ -][0-9]{{4}}{_PHONE_GUARD}", _phone),
     _r("phone_digits", rf"(?<![\w.,\-])[0-9]{{8,}}{_PHONE_GUARD}", _phone),
     _r("range", r"(?<=[0-9])(?:-|\s*[–—]\s*)(?=[0-9])", ", "),
     _r(

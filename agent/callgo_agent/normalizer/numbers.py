@@ -24,9 +24,11 @@ digit  standalone  attributive    tens   standalone  attributive
 =====  ==========  ===========    =====  ==========  ===========
 
 Scale words: 100 зуу / зуун, 1 000 мянга / мянган, 10^6 сая, 10^9 тэрбум
-(сая and тэрбум are invariant). Every word that is followed by another word of
-the same number takes its attributive form, so 15 000 is "арван таван мянга"
-and, in front of a noun, "арван таван мянган төгрөг".
+(сая and тэрбум are invariant). Every word followed by another word of the
+same number takes its attributive form ("зуун тав", "хорин нэг"), except
+мянга which only becomes мянган as the last word in front of a noun:
+2500 "хоёр мянга таван зуу", 15 000 "арван таван мянга", and
+"арван таван мянган төгрөг".
 
 Coefficient 1: a *leading* 1 is dropped before зуу and мянга (100 "зуу",
 1000 "мянга", 1100 "мянга нэг зуу") but never before сая / тэрбум
@@ -131,7 +133,8 @@ def number_to_words(n: int, attributive: bool = False) -> str:
     if n > MAX_WORDED:
         return digits_to_words(str(n))
     toks = _tokens(n)
-    words = [t[1] for t in toks[:-1]]
+    # мянга keeps its plain form unless it is the last word before a noun
+    words = [t[0] if t is _THOUSAND else t[1] for t in toks[:-1]]
     words.append(toks[-1][1] if attributive else toks[-1][0])
     return " ".join(words)
 
