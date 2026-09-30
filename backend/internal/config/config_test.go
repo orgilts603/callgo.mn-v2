@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -159,4 +160,19 @@ func TestNewLogger(t *testing.T) {
 	l := NewLogger(cfg)
 	assert.False(t, l.Debug().Enabled())
 	assert.True(t, l.Warn().Enabled())
+}
+
+// TestEnvExampleLoads guards backend/.env.example against drifting from the
+// loader: it must parse and produce a valid dev configuration.
+func TestEnvExampleLoads(t *testing.T) {
+	env, err := godotenv.Read("../../.env.example")
+	require.NoError(t, err)
+	require.NotEmpty(t, env)
+
+	cfg, err := load(lookupFrom(env))
+	require.NoError(t, err)
+	assert.Equal(t, EnvDev, cfg.Env)
+	assert.Equal(t, "callgo", cfg.LiveKit.AgentName)
+	assert.Equal(t, 20, cfg.Campaign.MaxConcurrency)
+	assert.Empty(t, cfg.SIP.AllowedAddresses)
 }

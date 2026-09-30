@@ -97,7 +97,7 @@ def test_cli_main_fake_without_wav(tmp_path, capsys):
 def test_load_profile_variants(tmp_path):
     from callgo_agent.mock_backend import build_bootstrap
 
-    profile, llm, fallbacks, lexicon = h.load_profile(None)
+    profile, llm, _fb, lexicon = h.load_profile(None)
     assert profile.language == "mn" and llm is not None and lexicon
 
     b = build_bootstrap({})
@@ -109,3 +109,12 @@ def test_load_profile_variants(tmp_path):
     p2 = tmp_path / "p.json"
     p2.write_text(json.dumps(b.profile.model_dump(mode="json", by_alias=True)), encoding="utf-8")
     assert h.load_profile(str(p2))[0].name == b.profile.name
+
+
+def test_committed_fixture_is_small_and_segmentable():
+    from pathlib import Path
+
+    p = Path(__file__).parent / "fixtures" / "speechlike.wav"
+    assert p.stat().st_size < 100_000
+    pcm, rate = au.read_wav(p, 16000)
+    assert len(au.segment_utterances(pcm, rate)) == 2

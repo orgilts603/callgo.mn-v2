@@ -25,7 +25,7 @@ func TestMuLawKnownVectors(t *testing.T) {
 
 func TestALawKnownVectors(t *testing.T) {
 	enc := map[int16]byte{
-		0: 0xD5, -1: 0x55, 32767: 0xAA, -32768: 0x2A, 8: 0xD4, 264: 0xC5,
+		0: 0xD5, -1: 0x55, 32767: 0xAA, -32768: 0x2A, 16: 0xD4, 264: 0xC5,
 	}
 	for pcm, want := range enc {
 		assert.Equalf(t, []byte{want}, ALawEncode([]int16{pcm}), "encode %d", pcm)

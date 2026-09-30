@@ -1,0 +1,24 @@
+# VCS / editor
+.git
+.gitignore
+.idea
+.vscode
+
+# Local config and secrets
+.env
+.env.*
+!.env.example
+
+# Build output and test artefacts
+bin/
+out/
+tmp/
+coverage.out
+*.test
+*.out
+
+# Docs and packaging files not needed in the build
+Dockerfile
+.dockerignore
+README.md
+Makefile

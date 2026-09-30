@@ -73,7 +73,9 @@ def test_llm_from_env_defaults_and_keys():
     assert o.provider.value == "openai" and o.api_key == "sk-x"
     g = mb.llm_from_env({"GOOGLE_API_KEY": "g-x"})
     assert g.provider.value == "google" and g.model.startswith("gemini")
-    f = mb.llm_from_env({"OPENAI_API_KEY": "k", "MOCK_LLM_PROVIDER": "google", "GOOGLE_API_KEY": "g"})
+    f = mb.llm_from_env(
+        {"OPENAI_API_KEY": "k", "MOCK_LLM_PROVIDER": "google", "GOOGLE_API_KEY": "g"}
+    )
     assert f.provider.value == "google"
 
 

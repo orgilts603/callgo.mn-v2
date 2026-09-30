@@ -48,6 +48,9 @@ logger = logging.getLogger("callgo.stt_local")
 WHISPER_SAMPLE_RATE = 16000
 """faster-whisper expects mono float32 PCM at 16 kHz in [-1, 1]."""
 
+DEFAULT_TEMPERATURES: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+"""faster-whisper's default temperature fallback schedule (guards against repetition loops)."""
+
 _AUTO_LANGUAGES = frozenset({"", "auto", "detect"})
 
 
@@ -233,7 +236,7 @@ class WhisperSTT(stt.STT):
         cpu_threads: int = 0,
         num_workers: int = 1,
         local_files_only: bool = False,
-        temperature: float | tuple[float, ...] = 0.0,
+        temperature: float | tuple[float, ...] = DEFAULT_TEMPERATURES,
         model_factory: ModelFactory | None = None,
     ) -> None:
         """
