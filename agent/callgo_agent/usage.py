@@ -18,10 +18,10 @@ import contextlib
 import logging
 import math
 import os
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any
 
 from livekit.agents import MetricsCollectedEvent
 from livekit.agents.metrics import LLMMetrics, STTMetrics, TTSMetrics
@@ -80,12 +80,6 @@ class CostRates:
         return max(0, math.floor(total + 0.5))
 
 
-class _MetricsSource(Protocol):
-    def on(self, event: str, callback: Callable[..., Any]) -> Any: ...
-
-    def off(self, event: str, callback: Callable[..., Any]) -> Any: ...
-
-
 class UsageTracker:
     """Accumulates one call's usage from framework metrics. Never raises into the call."""
 
@@ -101,16 +95,16 @@ class UsageTracker:
 
     # -- wiring --
 
-    def attach(self, session: _MetricsSource) -> None:
-        """Subscribe to ``session.on("metrics_collected")``."""
+    def attach(self, session: Any) -> None:
+        """Subscribe to ``session.on("metrics_collected")`` (an ``AgentSession``)."""
         session.on("metrics_collected", self.on_metrics_collected)
 
-    def detach(self, session: _MetricsSource) -> None:
+    def detach(self, session: Any) -> None:
         with contextlib.suppress(Exception):
             session.off("metrics_collected", self.on_metrics_collected)
 
     @contextmanager
-    def watch(self, source: _MetricsSource | None) -> Iterator[None]:
+    def watch(self, source: Any) -> Iterator[None]:
         """Count metrics emitted directly by ``source`` (e.g. the post-call analysis LLM)."""
         if source is None or not hasattr(source, "on"):
             yield

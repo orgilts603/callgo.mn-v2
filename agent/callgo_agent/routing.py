@@ -19,7 +19,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from typing import Any, Literal
 
 from .schemas import Bootstrap, CallDirection, EndReason, MenuOption, ResolvedRoute
 
@@ -143,13 +143,7 @@ class KeyQueue:
         return await self._queue.get()
 
 
-class _Emitter(Protocol):
-    def on(self, event: str, callback: Callable[..., Any]) -> Any: ...
-
-    def off(self, event: str, callback: Callable[..., Any]) -> Any: ...
-
-
-def attach_dtmf(room: _Emitter, keys: KeyQueue, identity: str = "") -> Callable[[], None]:
+def attach_dtmf(room: Any, keys: KeyQueue, identity: str = "") -> Callable[[], None]:
     """Feed ``rtc.Room`` ``sip_dtmf_received`` (``rtc.SipDTMF``) digits into ``keys``.
 
     With ``identity`` only digits from that participant (the SIP caller) count. Returns a
@@ -174,7 +168,7 @@ def attach_dtmf(room: _Emitter, keys: KeyQueue, identity: str = "") -> Callable[
 
 
 def attach_spoken_keys(
-    session: _Emitter, keys: KeyQueue, options: Sequence[MenuOption]
+    session: Any, keys: KeyQueue, options: Sequence[MenuOption]
 ) -> Callable[[], None]:
     """Feed final ``user_input_transcribed`` transcripts that name a key into ``keys``."""
 

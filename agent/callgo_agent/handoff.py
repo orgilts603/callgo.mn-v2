@@ -62,12 +62,6 @@ class HandoffObserver(Protocol):
     def handoff_ended(self) -> None: ...
 
 
-class _Room(Protocol):
-    def on(self, event: str, callback: Callable[..., Any]) -> Any: ...
-
-    def off(self, event: str, callback: Callable[..., Any]) -> Any: ...
-
-
 Transcribe = Callable[[Any], Awaitable[None]]
 """Coroutine function transcribing one operator participant until cancelled."""
 
@@ -77,7 +71,7 @@ class HandoffController:
 
     def __init__(
         self,
-        room: _Room,
+        room: Any,
         session: Any,
         state: CallState,
         emitter: EventEmitter,

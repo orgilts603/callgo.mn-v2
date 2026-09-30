@@ -1460,7 +1460,11 @@ async def run_call(
     emitter = EventEmitter(client, org_id=boot.org.id, call_id=boot.call.id)
     emitter.start()
     state = CallState(bootstrap=boot)
-    state.on_handoff_request = lambda _reason: emitter.call_handoff("requested")
+
+    def _on_handoff_request(_reason: str) -> None:
+        emitter.call_handoff("requested")
+
+    state.on_handoff_request = _on_handoff_request
     recorder = CallRecorder(emitter, boot, hit_sink=client)
     recorder.passive = lambda: state.passive
     usage = UsageTracker()
