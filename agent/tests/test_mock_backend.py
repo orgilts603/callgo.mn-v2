@@ -114,3 +114,31 @@ async def test_lexicon_hit(client: TestClient):
     assert (await (await client.get("/mock/events")).json())["lexiconHits"] == [i]
     r = await client.post("/internal/agent/lexicon-hit", json={"ids": ["bad"]}, headers=H)
     assert r.status == 400
+
+
+async def test_knowledge_search_returns_matching_passages(aiohttp_client_factory=None):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    from callgo_agent.mock_backend import create_app
+
+    app = create_app(token="t", quiet=True)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/internal/agent/knowledge/search",
+            json={
+                "knowledgeBaseId": "00000000-0000-0000-0000-000000000001",
+                "query": "багцын үнэ хэд вэ",
+                "k": 3,
+            },
+            headers={"X-Agent-Token": "t"},
+        )
+        assert resp.status == 200
+        hits = (await resp.json())["hits"]
+        assert hits and hits[0]["filename"] == "price-list.md"
+        assert {"chunkId", "documentId", "content", "score"} <= set(hits[0])
+        resp = await client.post(
+            "/internal/agent/knowledge/search",
+            json={"knowledgeBaseId": "x", "query": ""},
+            headers={"X-Agent-Token": "t"},
+        )
+        assert resp.status == 400

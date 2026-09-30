@@ -2,7 +2,7 @@
 
 Run: ``python -m callgo_agent.mock_backend --port 8080``
 
-Serves ``/internal/agent/{bootstrap,events,lexicon-hit}`` exactly as documented in
+Serves ``/internal/agent/{bootstrap,events,lexicon-hit,knowledge/search}`` as documented in
 ``docs/API.md`` plus ``GET /mock/events`` to inspect what the agent posted.
 """
 
@@ -259,6 +259,58 @@ async def post_lexicon_hit(request: web.Request) -> web.Response:
     return web.Response(status=204)
 
 
+# A tiny in-memory knowledge base so tool-mode lookups work against the mock.
+MOCK_KNOWLEDGE: list[dict[str, str]] = [
+    {
+        "filename": "price-list.md",
+        "heading": "Интернэтийн багц",
+        "content": "100 Мбит багц сарын 49,900 төгрөг. 300 Мбит багц сарын 79,900 төгрөг. "
+        "Суурилуулалт үнэгүй, гэрээ 12 сар.",
+    },
+    {
+        "filename": "policy.md",
+        "heading": "Буцаалтын нөхцөл",
+        "content": "Төхөөрөмжийг 14 хоногийн дотор бүрэн бүтэн буцаавал төлбөрийг 100% буцаана. "
+        "14 хоногоос хойш буцаалт хийгдэхгүй.",
+    },
+    {
+        "filename": "hours.md",
+        "heading": "Ажлын цаг",
+        "content": "Салбар Даваа-Баасан 09:00-18:00, Бямба 10:00-15:00 ажиллана. Ням амарна. "
+        "Дуудлагын төв 24 цаг ажиллана.",
+    },
+]
+
+
+async def post_knowledge_search(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+        query = str(body["query"]).strip()
+        k = int(body.get("k", 5) or 5)
+    except (ValueError, KeyError, TypeError):
+        return _error(400, "invalid", "expected {knowledgeBaseId, query, k}")
+    if not query:
+        return _error(400, "invalid", "query is required")
+    words = [w for w in query.casefold().split() if len(w) > 2]
+    hits: list[dict[str, Any]] = []
+    for i, doc in enumerate(MOCK_KNOWLEDGE):
+        text = (doc["heading"] + " " + doc["content"]).casefold()
+        score = sum(1 for w in words if w[:4] in text) / max(len(words), 1)
+        if score > 0:
+            hits.append(
+                {
+                    "chunkId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"chunk-{i}")),
+                    "documentId": str(uuid.uuid5(uuid.NAMESPACE_URL, f"doc-{i}")),
+                    "filename": doc["filename"],
+                    "heading": doc["heading"],
+                    "content": doc["content"],
+                    "score": round(min(score, 1.0), 3),
+                }
+            )
+    hits.sort(key=lambda h: -h["score"])
+    return web.json_response({"hits": hits[:k]})
+
+
 async def dump_events(request: web.Request) -> web.Response:
     events: list[dict[str, Any]] = request.app[EVENTS_KEY]
     if t := request.query.get("type"):
@@ -286,6 +338,7 @@ def create_app(
     app.router.add_get("/internal/agent/bootstrap", bootstrap)
     app.router.add_post("/internal/agent/events", post_events)
     app.router.add_post("/internal/agent/lexicon-hit", post_lexicon_hit)
+    app.router.add_post("/internal/agent/knowledge/search", post_knowledge_search)
     app.router.add_get("/mock/events", dump_events)
     app.router.add_delete("/mock/events", clear_events)
     return app
