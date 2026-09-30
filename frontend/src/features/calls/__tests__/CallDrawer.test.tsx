@@ -46,6 +46,35 @@ describe('CallDrawer', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/calls/c1/hangup'))
   })
 
+  it('adds the customer number to the do-not-call list after confirm', async () => {
+    get.mockResolvedValue(detail())
+    post.mockResolvedValue(undefined)
+    render(<CallDrawer callId="c1" onClose={() => {}} />, { wrapper: wrapper(makeQueryClient()) })
+    fireEvent.click(await screen.findByRole('button', { name: /Хориглох жагсаалтад нэмэх/ }))
+    expect(post).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog', { name: 'Хориглох жагсаалтад нэмэх үү?' })
+    expect(dialog).toHaveTextContent('+976 9911 2233') // inbound: the caller is the customer
+    fireEvent.change(within(dialog).getByLabelText('Шалтгаан'), { target: { value: 'Хүсэлтээр' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Нэмэх' }))
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/calls/c1/dnc', { reason: 'Хүсэлтээр' }))
+    const { toast } = await import('sonner')
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('хориглох жагсаалтад')))
+  })
+
+  it('uses the callee as the customer number on outbound calls and hides the action without one', async () => {
+    get.mockResolvedValue(detail({ call: makeCall({ direction: 'outbound', fromNumber: '+97677001100', toNumber: '+97688112233', status: 'completed' }) }))
+    post.mockResolvedValue(undefined)
+    const { unmount } = render(<CallDrawer callId="c1" onClose={() => {}} />, { wrapper: wrapper(makeQueryClient()) })
+    fireEvent.click(await screen.findByRole('button', { name: /Хориглох жагсаалтад нэмэх/ }))
+    expect(screen.getByRole('dialog', { name: 'Хориглох жагсаалтад нэмэх үү?' })).toHaveTextContent('+976 8811 2233')
+    unmount()
+
+    get.mockResolvedValue(detail({ call: makeCall({ direction: 'inbound', fromNumber: '', status: 'completed' }) }))
+    render(<CallDrawer callId="c1" onClose={() => {}} />, { wrapper: wrapper(makeQueryClient()) })
+    await screen.findByText('Бат-Эрдэнэ')
+    expect(screen.queryByRole('button', { name: /Хориглох жагсаалтад нэмэх/ })).toBeNull()
+  })
+
   it('transfers to a number', async () => {
     get.mockResolvedValue(detail())
     post.mockResolvedValue(undefined)

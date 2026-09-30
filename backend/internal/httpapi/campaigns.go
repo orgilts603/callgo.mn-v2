@@ -47,10 +47,10 @@ func formInt(r *http.Request, name string, def, lo, hi int) (int, error) {
 
 func (s *server) createCampaign(w http.ResponseWriter, r *http.Request) {
 	if s.d.TargetParser == nil {
-		s.writeErr(w, r, errNotConfigured("campaign CSV parser"))
+		s.writeErr(w, r, errNotConfigured("campaign list parser"))
 		return
 	}
-	f, err := multipartFile(w, r, true)
+	f, filename, err := multipartFile(w, r, true)
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -70,6 +70,21 @@ func (s *server) createCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	maxAttempts, err := formInt(r, "maxAttempts", 2, 1, 10)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	dryRunLimit, err := formInt(r, "dryRunLimit", 0, 0, maxDryRunLimit)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	schedule, err := scheduleFromForm(r.FormValue("schedule"))
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	outcomes, err := outcomesFromForm(r.FormValue("outcomes"))
 	if err != nil {
 		s.writeErr(w, r, err)
 		return
@@ -109,9 +124,9 @@ func (s *server) createCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	parsed, err := s.d.TargetParser.ParseTargets(f)
+	parsed, err := s.d.TargetParser.ParseTargets(f, filename)
 	if err != nil {
-		s.writeErr(w, r, errInvalid("could not parse CSV: %v", err))
+		s.writeErr(w, r, parseErr(err))
 		return
 	}
 	res := importResult{Skipped: parsed.Skipped, Errors: append([]RowError{}, parsed.Errors...)}
@@ -119,7 +134,8 @@ func (s *server) createCampaign(w http.ResponseWriter, r *http.Request) {
 	camp := &domain.Campaign{
 		ID: uuid.New(), OrgID: orgID, Name: name, SIPNumberID: &num.ID, AgentProfileID: profID,
 		Script: strings.TrimSpace(r.FormValue("script")), Status: domain.CampaignDraft,
-		Concurrency: concurrency, MaxAttempts: maxAttempts, CreatedAt: now, UpdatedAt: now,
+		Concurrency: concurrency, MaxAttempts: maxAttempts, Schedule: schedule, Outcomes: outcomes,
+		DryRunLimit: dryRunLimit, CreatedAt: now, UpdatedAt: now,
 	}
 	targets := make([]domain.CampaignTarget, 0, len(parsed.Targets))
 	seen := make(map[string]bool, len(parsed.Targets))
@@ -148,11 +164,22 @@ func (s *server) createCampaign(w http.ResponseWriter, r *http.Request) {
 		targets = append(targets, t)
 	}
 	if len(targets) == 0 {
-		s.writeErr(w, r, errInvalid("CSV contains no valid targets (skipped %d)", res.Skipped))
+		s.writeErr(w, r, errInvalid("the file contains no valid targets (skipped %d)", res.Skipped))
 		return
 	}
-	camp.Total = len(targets)
-	res.Imported = len(targets)
+	dnc, err := s.markDoNotCall(ctx, orgID, targets)
+	if err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
+	if dnc == len(targets) {
+		s.writeErr(w, r, errInvalid("all %d numbers are on the do-not-call list", dnc))
+		return
+	}
+	camp.Total, camp.Skipped = len(targets), dnc
+	res.Imported = len(targets) - dnc
+	res.Skipped += dnc
+	res.DoNotCall = dnc
 	if err := s.d.Campaign.CreateCampaign(ctx, camp, targets); err != nil {
 		s.writeErr(w, r, fmt.Errorf("create campaign: %w", err))
 		return
@@ -205,6 +232,20 @@ func (s *server) controlCampaign(w http.ResponseWriter, r *http.Request, start b
 		s.writeErr(w, r, err)
 		return
 	}
+	// Optional start body {dryRunLimit: N}; absent = the stored limit.
+	var body struct {
+		DryRunLimit *int `json:"dryRunLimit"`
+	}
+	if start {
+		if err := decodeOptionalJSON(w, r, &body); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
+		if body.DryRunLimit != nil && (*body.DryRunLimit < 0 || *body.DryRunLimit > maxDryRunLimit) {
+			s.writeErr(w, r, errInvalid("dryRunLimit must be between 0 and %d", maxDryRunLimit))
+			return
+		}
+	}
 	if s.d.Campaigns == nil {
 		s.writeErr(w, r, errNotConfigured("campaign engine"))
 		return
@@ -221,7 +262,11 @@ func (s *server) controlCampaign(w http.ResponseWriter, r *http.Request, start b
 			s.writeErr(w, r, errConflict("campaign is already completed"))
 			return
 		}
-		err = s.d.Campaigns.Start(ctx, c.ID)
+		limit := c.DryRunLimit
+		if body.DryRunLimit != nil {
+			limit = *body.DryRunLimit
+		}
+		err = s.d.Campaigns.Start(ctx, c.ID, limit)
 	} else {
 		if c.Status != domain.CampaignRunning {
 			s.writeErr(w, r, errConflict("campaign is not running"))

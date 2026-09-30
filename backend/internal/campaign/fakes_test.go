@@ -171,6 +171,27 @@ func (r *fakeCampaignRepo) CountActiveTargets(_ context.Context, campaignID uuid
 	return n, nil
 }
 
+func (r *fakeCampaignRepo) DeleteCampaign(_ context.Context, id uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.campaigns[id]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(r.campaigns, id)
+	delete(r.targets, id)
+	return nil
+}
+
+func (r *fakeCampaignRepo) ListAllTargets(_ context.Context, campaignID uuid.UUID) ([]domain.CampaignTarget, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]domain.CampaignTarget, 0, len(r.targets[campaignID]))
+	for _, t := range r.targets[campaignID] {
+		out = append(out, *t)
+	}
+	return out, nil
+}
+
 func (r *fakeCampaignRepo) target(campaignID, id uuid.UUID) domain.CampaignTarget {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -408,6 +429,87 @@ func (r *fakeProfileRepo) GetAgentProfile(_ context.Context, id uuid.UUID) (*dom
 }
 func (r *fakeProfileRepo) ListAgentProfiles(context.Context, uuid.UUID) ([]domain.AgentProfile, error) {
 	return nil, nil
+}
+
+// ---------------------------------------------------------------------------
+// do-not-call list
+
+type fakeDNCRepo struct {
+	mu      sync.Mutex
+	entries map[string]domain.DoNotCallEntry // key: org + phone
+	err     error                            // returned by FilterDoNotCall when set
+	filters int
+}
+
+func newFakeDNCRepo() *fakeDNCRepo {
+	return &fakeDNCRepo{entries: map[string]domain.DoNotCallEntry{}}
+}
+
+func (r *fakeDNCRepo) AddDoNotCall(_ context.Context, e *domain.DoNotCallEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := e.OrgID.String() + e.Phone
+	if cur, ok := r.entries[key]; ok {
+		*e = cur
+		return nil
+	}
+	if e.ID == uuid.Nil {
+		e.ID = uuid.New()
+	}
+	r.entries[key] = *e
+	return nil
+}
+
+func (r *fakeDNCRepo) RemoveDoNotCall(_ context.Context, orgID uuid.UUID, phone string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := orgID.String() + phone
+	if _, ok := r.entries[key]; !ok {
+		return domain.ErrNotFound
+	}
+	delete(r.entries, key)
+	return nil
+}
+
+func (r *fakeDNCRepo) ListDoNotCall(_ context.Context, orgID uuid.UUID, _ string, _, _ int) ([]domain.DoNotCallEntry, int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []domain.DoNotCallEntry
+	for _, e := range r.entries {
+		if e.OrgID == orgID {
+			out = append(out, e)
+		}
+	}
+	return out, len(out), nil
+}
+
+func (r *fakeDNCRepo) IsDoNotCall(_ context.Context, orgID uuid.UUID, phone string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	_, ok := r.entries[orgID.String()+phone]
+	return ok, nil
+}
+
+func (r *fakeDNCRepo) FilterDoNotCall(_ context.Context, orgID uuid.UUID, phones []string) (map[string]bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.filters++
+	if r.err != nil {
+		return nil, r.err
+	}
+	out := map[string]bool{}
+	for _, p := range phones {
+		if _, ok := r.entries[orgID.String()+p]; ok {
+			out[p] = true
+		}
+	}
+	return out, nil
+}
+
+func (r *fakeDNCRepo) setErr(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.err = err
 }
 
 // ---------------------------------------------------------------------------

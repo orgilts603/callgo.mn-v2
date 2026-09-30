@@ -23,6 +23,7 @@ type fixture struct {
 	contacts  *fakeContactRepo
 	numbers   *fakeSIPRepo
 	profiles  *fakeProfileRepo
+	dnc       *fakeDNCRepo
 	tel       *fakeTelephony
 	bus       *fakeBus
 	opts      Options
@@ -47,6 +48,7 @@ func newFixture(t *testing.T, opts Options) *fixture {
 		contacts:  newFakeContactRepo(),
 		numbers:   &fakeSIPRepo{numbers: map[uuid.UUID]domain.SIPNumber{}},
 		profiles:  &fakeProfileRepo{profiles: map[uuid.UUID]domain.AgentProfile{}},
+		dnc:       newFakeDNCRepo(),
 		tel:       &fakeTelephony{},
 		bus:       &fakeBus{},
 		opts:      opts,
@@ -61,7 +63,7 @@ func newFixture(t *testing.T, opts Options) *fixture {
 }
 
 func (f *fixture) newEngine() *Engine {
-	return NewEngine(f.campaigns, f.calls, f.contacts, f.numbers, f.profiles, f.tel, f.bus, f.opts, zerolog.Nop())
+	return NewEngine(f.campaigns, f.calls, f.contacts, f.numbers, f.profiles, f.dnc, f.tel, f.bus, f.opts, zerolog.Nop())
 }
 
 // addCampaign creates a campaign with n targets in the given status.
@@ -364,8 +366,8 @@ func TestStartAndPause(t *testing.T) {
 	f.poll()
 	assert.Empty(t, f.tel.dials())
 
-	require.NoError(t, f.engine.Start(ctx, c.ID))
-	require.NoError(t, f.engine.Start(ctx, c.ID)) // idempotent
+	require.NoError(t, f.engine.Start(ctx, c.ID, 0))
+	require.NoError(t, f.engine.Start(ctx, c.ID, 0)) // idempotent
 	assert.Equal(t, domain.CampaignRunning, f.campaign(c.ID).Status)
 
 	f.engine.pollOnce(ctx)
@@ -389,7 +391,7 @@ func TestStartAndPause(t *testing.T) {
 	assert.Len(t, f.tel.dials(), 1)
 	assert.Equal(t, claims, f.campaigns.claimCount())
 
-	require.NoError(t, f.engine.Start(ctx, c.ID))
+	require.NoError(t, f.engine.Start(ctx, c.ID, 0))
 	close(f.tel.gate)
 	f.poll()
 	assert.Len(t, f.tel.dials(), 2)
@@ -407,35 +409,35 @@ func TestStartValidation(t *testing.T) {
 
 	_, err := f.campaigns.GetCampaign(ctx, uuid.New())
 	require.ErrorIs(t, err, domain.ErrNotFound)
-	require.ErrorIs(t, f.engine.Start(ctx, uuid.New()), domain.ErrNotFound)
+	require.ErrorIs(t, f.engine.Start(ctx, uuid.New(), 0), domain.ErrNotFound)
 
 	empty := f.addCampaign(domain.CampaignDraft, 1, 1, 0)
-	require.ErrorIs(t, f.engine.Start(ctx, empty.ID), domain.ErrInvalid)
+	require.ErrorIs(t, f.engine.Start(ctx, empty.ID, 0), domain.ErrInvalid)
 
 	done := f.addCampaign(domain.CampaignCompleted, 1, 1, 1)
-	require.ErrorIs(t, f.engine.Start(ctx, done.ID), domain.ErrConflict)
+	require.ErrorIs(t, f.engine.Start(ctx, done.ID, 0), domain.ErrConflict)
 	require.ErrorIs(t, f.engine.Pause(ctx, done.ID), domain.ErrConflict)
 
 	noSIP := f.addCampaign(domain.CampaignDraft, 1, 1, 1)
 	noSIP.SIPNumberID = nil
 	require.NoError(t, f.campaigns.UpdateCampaign(ctx, &noSIP))
-	require.ErrorIs(t, f.engine.Start(ctx, noSIP.ID), domain.ErrInvalid)
+	require.ErrorIs(t, f.engine.Start(ctx, noSIP.ID, 0), domain.ErrInvalid)
 
 	inbound := domain.SIPNumber{ID: uuid.New(), OrgID: f.orgID, Number: "+97677000000", AllowInbound: true}
 	require.NoError(t, f.numbers.CreateSIPNumber(ctx, &inbound))
 	inboundOnly := f.addCampaign(domain.CampaignDraft, 1, 1, 1)
 	inboundOnly.SIPNumberID = &inbound.ID
 	require.NoError(t, f.campaigns.UpdateCampaign(ctx, &inboundOnly))
-	require.ErrorIs(t, f.engine.Start(ctx, inboundOnly.ID), domain.ErrInvalid)
+	require.ErrorIs(t, f.engine.Start(ctx, inboundOnly.ID, 0), domain.ErrInvalid)
 
 	missingSIP := f.addCampaign(domain.CampaignDraft, 1, 1, 1)
 	gone := uuid.New()
 	missingSIP.SIPNumberID = &gone
 	require.NoError(t, f.campaigns.UpdateCampaign(ctx, &missingSIP))
-	require.ErrorIs(t, f.engine.Start(ctx, missingSIP.ID), domain.ErrInvalid)
+	require.ErrorIs(t, f.engine.Start(ctx, missingSIP.ID, 0), domain.ErrInvalid)
 
 	ok := f.addCampaign(domain.CampaignDraft, 1, 1, 1)
-	require.NoError(t, f.engine.Start(ctx, ok.ID))
+	require.NoError(t, f.engine.Start(ctx, ok.ID, 0))
 	assert.Equal(t, domain.CampaignRunning, f.campaign(ok.ID).Status)
 	require.ErrorIs(t, f.engine.Pause(ctx, empty.ID), domain.ErrConflict)
 }
