@@ -224,14 +224,16 @@ class EventEmitter:
         usage: CallUsage | None = None,
         callbacks: Iterable[CallbackIntent] = (),
     ) -> Event | None:
-        """``call.ended``; ``usage`` and ``callbacks`` are added next to the payload fields
-        (``CallEndedPayload`` itself does not carry them)."""
+        """``call.ended``; explicit ``usage`` and ``callbacks`` override the payload's
+        own fields (``CallEndedPayload.usage`` / ``.callbacks``)."""
         body = _dump(payload)
         if usage is not None:
             body["usage"] = _dump(usage)
-        cbs = [_dump(c) for c in callbacks]
+        cbs = [_dump(c) for c in callbacks] or body.get("callbacks") or []
         if cbs:
             body["callbacks"] = cbs
+        else:
+            body.pop("callbacks", None)
         return self.emit("call.ended", body)
 
     def system(self, message: str) -> Event | None:

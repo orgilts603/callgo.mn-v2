@@ -96,8 +96,8 @@ func (f *fakeIntegrations) ListCallbacks(_ context.Context, orgID uuid.UUID, sta
 	return out, total, nil
 }
 
-// ClaimDueCallbacks moves pending, due callbacks to dialed (Attempts is left
-// alone, as the scheduler counts attempts itself).
+// ClaimDueCallbacks moves pending, due callbacks to dialed and increments
+// Attempts, like the crm repository.
 func (f *fakeIntegrations) ClaimDueCallbacks(_ context.Context, n int) ([]domain.CallbackRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -109,6 +109,7 @@ func (f *fakeIntegrations) ClaimDueCallbacks(_ context.Context, n int) ([]domain
 		}
 		if c.Status == domain.CallbackPending && !c.DueAt.After(f.clock()) {
 			c.Status = domain.CallbackDialed
+			c.Attempts++
 			f.items[id] = c
 			out = append(out, c)
 		}

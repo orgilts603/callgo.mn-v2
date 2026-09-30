@@ -245,6 +245,10 @@ func (s *server) dial(w http.ResponseWriter, r *http.Request) {
 		s.writeErr(w, r, err)
 		return
 	}
+	if err := s.checkCanStartCall(ctx, orgID); err != nil {
+		s.writeErr(w, r, err)
+		return
+	}
 	numID, err := parseOptUUID(req.SIPNumberID, "sipNumberId")
 	if err != nil {
 		s.writeErr(w, r, err)
@@ -506,7 +510,68 @@ func (s *server) finalizeCall(ctx context.Context, c *domain.Call, o callOutcome
 	if s.d.Campaigns != nil && c.CampaignID != nil {
 		s.d.Campaigns.OnCallEnded(ctx, c)
 	}
+	s.runCallEndedHooks(ctx, c)
 	return true, nil
+}
+
+// runCallEndedHooks runs Deps.CallEndedHooks (metering, post-call actions,
+// callbacks) in the background on a snapshot of the call.
+func (s *server) runCallEndedHooks(ctx context.Context, c *domain.Call) {
+	if len(s.d.CallEndedHooks) == 0 {
+		return
+	}
+	snap := *c
+	hooks := s.d.CallEndedHooks
+	s.goBackground(ctx, 2*time.Minute, func(ctx context.Context) {
+		for _, h := range hooks {
+			func() {
+				defer func() {
+					if rec := recover(); rec != nil {
+						s.log.Error().Interface("panic", rec).Str("call", snap.ID.String()).Msg("call-ended hook panicked")
+					}
+				}()
+				h(ctx, &snap)
+			}()
+		}
+	})
+}
+
+// checkCanStartCall answers 402 payment_required / 429 quota_exceeded when
+// the org's plan does not allow a new call right now.
+func (s *server) checkCanStartCall(ctx context.Context, orgID uuid.UUID) error {
+	if s.d.Entitlements == nil {
+		return nil
+	}
+	ok, reason, err := s.d.Entitlements.CanStartCall(ctx, orgID)
+	if err != nil {
+		return fmt.Errorf("entitlements: %w", err)
+	}
+	if ok {
+		return nil
+	}
+	return entitlementError(reason)
+}
+
+// entitlementError maps a CanStartCall reason ("payment_required:…" or
+// "quota_exceeded:…") to an API error.
+func entitlementError(reason string) error {
+	code, msg, _ := strings.Cut(reason, ":")
+	msg = strings.TrimSpace(msg)
+	switch code {
+	case "payment_required":
+		if msg == "" {
+			msg = "subscription is not active"
+		}
+		return &apiError{status: http.StatusPaymentRequired, code: "payment_required", message: msg}
+	default:
+		if msg == "" {
+			msg = reason
+		}
+		if msg == "" {
+			msg = "plan quota exceeded"
+		}
+		return &apiError{status: http.StatusTooManyRequests, code: "quota_exceeded", message: msg}
+	}
 }
 
 // asInvalidRef turns a 404 on a referenced entity into a 400 on the field.

@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/livekit/protocol/livekit"
 
+	"github.com/orgilts603/callgo.mn-v2/backend/internal/auth"
 	"github.com/orgilts603/callgo.mn-v2/backend/internal/domain"
 )
 
@@ -63,6 +65,55 @@ type Deps struct {
 	CampaignStats CampaignStats
 	// Ready is an optional readiness probe (e.g. DB ping) for /readyz.
 	Ready func(ctx context.Context) error
+
+	// ---- SaaS features (docs/ROADMAP_SAAS.md). Each feature has its own
+	// Deps struct and mount function; the integrator fills them in. A zero
+	// value leaves the feature unmounted / not configured.
+
+	// Identity serves signup, login, refresh, invitations, password reset,
+	// API keys and audit (mounted under /api outside the auth group). When
+	// Identity.Svc is nil the legacy /api/auth/login route is used.
+	Identity IdentityDeps
+	// Billing serves plans, subscriptions, usage, invoices and payments.
+	Billing BillingDeps
+	// Recordings serves call recordings (mounted on the root router).
+	Recordings RecordingDeps
+	// Handoff serves the operator take-over API (root router).
+	Handoff HandoffDeps
+	// Integrations serves webhooks, SMS and post-call actions.
+	Integrations IntegrationsDeps
+	// Analytics serves the reporting endpoints.
+	Analytics AnalyticsDeps
+	// Routing serves inbound routing (business hours, DTMF menu).
+	Routing RoutingDeps
+	// Callbacks serves scheduled callbacks.
+	Callbacks CallbackDeps
+	// Admin serves the platform-admin API (root router, own auth).
+	Admin AdminDeps
+
+	// Entitlements answers quota / feature questions (the billing service).
+	// nil = everything allowed (development / tests).
+	Entitlements domain.Entitlements
+	// OrgStatus resolves an organisation's status for the OrgGate middleware
+	// (suspended / closed orgs get 402 / 403). nil disables the gate.
+	OrgStatus func(ctx context.Context, orgID uuid.UUID) (domain.OrgStatus, error)
+	// APIKeys resolves `cg_live_…` bearer tokens on the authenticated
+	// routes. nil disables API-key auth.
+	APIKeys auth.APIKeyResolver
+	// EgressWebhook handles LiveKit egress_* webhooks (recording service).
+	// It returns handled=false when the event is not an egress event; the
+	// legacy handler then runs.
+	EgressWebhook func(ctx context.Context, ev *livekit.WebhookEvent) (bool, error)
+	// CallEndedHooks run after a call reached a terminal state and was
+	// persisted (billing metering, post-call actions, callbacks, …). They
+	// run in order, in the background, each with its own timeout.
+	CallEndedHooks []func(ctx context.Context, call *domain.Call)
+	// SetHandoff persists call.handoff / call.operatorId (call.updated
+	// events from the agent). nil falls back to Call.UpdateCall.
+	SetHandoff func(ctx context.Context, callID uuid.UUID, state domain.HandoffState, operatorID *uuid.UUID) error
+	// CreateCallback schedules a callback requested by the agent in
+	// call.ended (the callbacks scheduler). nil ignores the requests.
+	CreateCallback func(ctx context.Context, c *domain.CallbackRequest) error
 }
 
 // Config holds HTTP-layer settings.

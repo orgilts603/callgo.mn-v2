@@ -17,7 +17,7 @@ function writeDismissed(userId: string) {
 }
 
 /** Sends the verification email again, with a cooldown so the button cannot be hammered. */
-export function useResendVerification() {
+function useResendVerification() {
   const [pending, setPending] = useState(false)
   const [sentAt, setSentAt] = useState<number | null>(null)
   useEffect(() => {

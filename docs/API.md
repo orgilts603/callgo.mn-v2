@@ -194,7 +194,7 @@ Conventions unchanged (JSON, `{items,total}`, error envelope). New auth methods:
 - `POST /api/billing/subscription` `{planCode}` → `{subscription, invoice?}` — switching to a paid plan creates an `open` invoice for the first period (prorated not required; full month); plan becomes effective when paid (status `past_due` until then if upgrading from trial with expired trial; `active` immediately when downgrading/paid).
 - `POST /api/billing/subscription/cancel` → `{subscription}` (cancels at period end).
 - `GET /api/billing/usage?from=&to=` → `{summary: UsageSummary, daily: [{day, minutes, calls, costMnt}]}`.
-- `GET /api/billing/invoices` → `{items: Invoice[]}`; `GET /api/billing/invoices/{id}` → `{invoice, payments: Payment[]}`; `GET /api/billing/invoices/{id}/pdf` → application/pdf (simple generated PDF, Mongolian labels).
+- `GET /api/billing/invoices` → `{items: Invoice[]}`; `GET /api/billing/invoices/{id}` → `{invoice, payments: Payment[]}`; `GET /api/billing/invoices/{id}/pdf` → a print-ready HTML invoice (`text/html`, Mongolian labels; the browser's print dialog produces the PDF).
 - `POST /api/billing/invoices/{id}/pay` `{provider: "qpay"|"mock"}` → 201 `{payment}` with `qrText`, `qrImage`, `deepLinks`, `expiresAt`.
 - `GET /api/billing/payments/{id}` → `{payment}` (UI polls every 3 s until paid/expired; also calls provider Check when pending and > 10 s old).
 - `POST /api/billing/webhooks/qpay?payment_id=<uuid>` (public, provider callback) → 200 `SUCCESS`; verifies via provider Check, marks payment + invoice paid, activates subscription, audit entry.
@@ -221,7 +221,7 @@ Conventions unchanged (JSON, `{items,total}`, error envelope). New auth methods:
 - Callbacks: `GET /api/callbacks?status=&limit=&offset=` → `{items, total}`; `POST /api/callbacks` `{phone, name?, note?, dueAt, sipNumberId?, agentProfileId?, contactId?}` → 201; `PUT /api/callbacks/{id}` `{dueAt?, note?, status?: "canceled"}`; `DELETE`. The scheduler dials due callbacks (respecting business hours of the SIP number and entitlements) as outbound calls with `metadata.callbackId`; `call.ended` marks the callback done/failed (retry once after 30 min on no_answer/busy). The agent tool `schedule_callback(when, note)` now creates a CallbackRequest through the events ingest (`call.ended` payload `callbacks: [{dueAt, note}]`).
 
 ## Inbound routing
-- `SIPNumber.routing: RoutingConfig` accepted on `POST/PUT /api/sip-numbers` (validated: menu keys unique in 0-9,*,#; profiles belong to org; timeout 3..30; repeat 0..3). `POST /api/sip-numbers/{id}/routing/resolve?at=<rfc3339>` → `{route: ResolvedRoute}` (preview).
+- `SIPNumber.routing: RoutingConfig` accepted on `POST/PUT /api/sip-numbers` (validated: menu keys unique in 0-9,*,#; profiles belong to org; timeout 3..30; repeat 0..3). `PUT /api/sip-numbers/{id}/routing` `RoutingConfig` → `{sipNumber}` (admin; same validation). `POST /api/sip-numbers/{id}/routing/resolve?at=<rfc3339>` → `{route: ResolvedRoute}` (preview).
 - Bootstrap gains `route: ResolvedRoute` (inbound only) and the resolved `profile`. For `mode=after_hours` with no profile the agent speaks `message` and hangs up (`endReason: after_hours`). For `mode=menu` the agent speaks `menuPrompt`, waits for DTMF (`MenuTimeoutSec`, repeats `MenuRepeat` times), then re-bootstraps with `?profileId=` (`GET /internal/agent/bootstrap` accepts `profileId` to override) and continues; unknown key → repeats prompt.
 
 ## Analytics (feature `analytics`)

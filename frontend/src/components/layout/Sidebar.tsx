@@ -5,7 +5,7 @@ import { useUI } from '@/app/ui'
 import { useLive } from '@/lib/ws'
 import { cn } from '@/lib/utils'
 import { LogoMark } from './Logo'
-import { NAV_ITEMS, NAV_SECTIONS, type NavItem } from './nav'
+import { NAV_SECTIONS, visibleNavItems, type NavItem } from './nav'
 
 function NavEntry({ item, collapsed, count }: { item: NavItem; collapsed: boolean; count?: number }) {
   const Icon = item.icon
@@ -45,6 +45,8 @@ export function Sidebar() {
   const collapsed = useUI((s) => s.sidebarCollapsed)
   const toggle = useUI((s) => s.toggleSidebar)
   const org = useAuth((s) => s.org)
+  const isPlatformAdmin = useAuth((s) => !!s.user?.isPlatformAdmin)
+  const items = visibleNavItems(isPlatformAdmin)
   const activeCount = useLive((s) => Object.keys(s.activeCalls).length)
 
   return (
@@ -73,7 +75,7 @@ export function Sidebar() {
               ? i > 0 && <div className="mx-2 mb-3 border-t border-[var(--border-subtle)]" />
               : <div className="mb-1 px-2 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[var(--fg-subtle)]">{sec.label}</div>}
             <ul className="space-y-0.5">
-              {NAV_ITEMS.filter((n) => n.section === sec.id).map((item) => (
+              {items.filter((n) => n.section === sec.id).map((item) => (
                 <li key={item.to}><NavEntry item={item} collapsed={collapsed} count={item.to === '/live' ? activeCount : undefined} /></li>
               ))}
             </ul>

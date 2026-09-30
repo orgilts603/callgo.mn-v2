@@ -250,12 +250,12 @@ func (s *Scheduler) process(ctx context.Context, c *domain.CallbackRequest) {
 		ok, reason, err := s.ent.CanStartCall(ctx, c.OrgID)
 		if err != nil {
 			log.Error().Err(err).Msg("check entitlements; deferring callback")
-			s.reschedule(wctx, c, s.now().Add(s.cfg.DeferAfter))
+			s.deferUndialed(wctx, c, s.now().Add(s.cfg.DeferAfter))
 			return
 		}
 		if !ok {
 			log.Info().Str("reason", reason).Msg("org may not start calls; deferring callback")
-			s.reschedule(wctx, c, s.now().Add(s.cfg.DeferAfter))
+			s.deferUndialed(wctx, c, s.now().Add(s.cfg.DeferAfter))
 			return
 		}
 	}
@@ -275,7 +275,7 @@ func (s *Scheduler) process(ctx context.Context, c *domain.CallbackRequest) {
 			return
 		}
 		log.Info().Time("next", next).Str("number", num.Number).Msg("outside business hours; rescheduling callback")
-		s.reschedule(wctx, c, next)
+		s.deferUndialed(wctx, c, next)
 		return
 	}
 
@@ -289,11 +289,11 @@ func (s *Scheduler) process(ctx context.Context, c *domain.CallbackRequest) {
 	call, err := s.startCall(ctx, c, num, profile)
 	if err != nil {
 		if ctx.Err() != nil {
-			s.reschedule(wctx, c, s.now())
+			s.deferUndialed(wctx, c, s.now())
 			return
 		}
 		log.Error().Err(err).Msg("prepare callback call")
-		s.reschedule(wctx, c, s.now().Add(errorBackoff))
+		s.deferUndialed(wctx, c, s.now().Add(errorBackoff))
 		return
 	}
 	s.dial(ctx, wctx, c, call, num, profile)
@@ -388,7 +388,7 @@ func (s *Scheduler) startCall(ctx context.Context, c *domain.CallbackRequest, nu
 		return nil, fmt.Errorf("create call: %w", err)
 	}
 
-	c.Attempts++
+	// Attempts was already incremented by IntegrationsRepository.ClaimDueCallbacks.
 	c.ResultCallID = &call.ID
 	c.SIPNumberID = &numID
 	c.AgentProfileID = &profID
@@ -532,6 +532,17 @@ func (s *Scheduler) settle(ctx context.Context, c *domain.CallbackRequest, resul
 	if err := s.repo.UpdateCallback(ctx, c); err != nil {
 		s.log.Error().Err(err).Str("callbackId", c.ID.String()).Msg("settle callback")
 	}
+}
+
+// deferUndialed puts back a claimed callback that was not dialed at all
+// (quota, business hours, preparation error). The claim counted an attempt
+// (ClaimDueCallbacks increments Attempts); that is undone so only real dials
+// count towards MaxAttempts.
+func (s *Scheduler) deferUndialed(ctx context.Context, c *domain.CallbackRequest, due time.Time) {
+	if c.Attempts > 0 {
+		c.Attempts--
+	}
+	s.reschedule(ctx, c, due)
 }
 
 // reschedule puts a claimed callback back to pending at due.

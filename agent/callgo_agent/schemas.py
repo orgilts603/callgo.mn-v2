@@ -195,9 +195,8 @@ class Call(CamelModel):
     end_reason: str = ""
     outcome: str = ""
     outcome_note: str = ""
-    usage: CallUsage | None = None
-    callbacks: list[CallbackIntent] = Field(default_factory=list)
     llm_model_used: str = ""
+    usage: CallUsage | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -345,6 +344,10 @@ class CallEndedPayload(CamelModel):
     # defines no outcomes / the call was not a campaign call.
     outcome: str = ""
     outcome_note: str = ""
+    # SaaS: provider usage for metering and callbacks the customer asked for
+    # (docs/EVENTS.md "call.ended").
+    usage: CallUsage | None = None
+    callbacks: list[CallbackIntent] = Field(default_factory=list)
 
 
 class JobMetadata(CamelModel):

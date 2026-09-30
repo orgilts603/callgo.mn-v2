@@ -6,6 +6,8 @@ import { PageContainer } from './PageContainer'
 import { getHandle } from './route-handle'
 import { Sidebar } from './Sidebar'
 import { Topbar } from './Topbar'
+import { VerifyBanner } from '@/features/auth/VerifyBanner'
+import { QuotaBanner } from '@/features/billing/QuotaBanner'
 
 /** Authenticated layout: sidebar + top bar + routed page. */
 export function AppShell() {
@@ -24,6 +26,8 @@ export function AppShell() {
       <Sidebar />
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar searchRef={searchRef} />
+        <VerifyBanner />
+        <QuotaBanner />
         <main id="main" tabIndex={-1} className="min-h-0 flex-1 focus:outline-none">
           <ErrorBoundary resetKey={pathname}>
             <PageContainer fluid={fullWidth}>

@@ -120,6 +120,23 @@ type Config struct {
 	AgentWorkerURL  string
 	ShutdownTimeout time.Duration
 
+	// ---- SaaS ----
+	// AppURL is the public dashboard origin used in e-mail links.
+	AppURL string
+	// SMTP settings; empty host = log mailer (dev).
+	SMTPHost, SMTPPort, SMTPUser, SMTPPass, SMTPFrom string
+	AccessTTL, RefreshTTL                            time.Duration
+	// Recordings
+	RecordingsEnabled                                                                       bool
+	RecordingsDriver                                                                        string // "s3" | "local"
+	RecordingsDir                                                                           string
+	RecordingRetentionDays                                                                  int
+	S3Endpoint, S3EgressEndpoint, S3PublicURL, S3Bucket, S3AccessKey, S3SecretKey, S3Region string
+	S3UseSSL                                                                                bool
+	LiveKitPublicURL                                                                        string
+	// Cost estimates used for internal margin reporting (MNT).
+	CostLLMPer1kTokensMNT, CostSTTPerMinMNT, CostTTSPer1kCharsMNT, CostSMSPerMsgMNT int64
+
 	// Warnings are non-fatal configuration problems found by Load (dev
 	// defaults in use, mock telephony enabled in prod, ...). The caller should
 	// log them once a logger exists; see LogWarnings.
@@ -253,8 +270,33 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		SimulatorInterval:       l.duration("CALLGO_SIMULATOR_INTERVAL", 4*time.Second),
 		KnowledgeFakeEmbeddings: l.boolean("CALLGO_EMBED_FAKE", false),
 
-		AgentWorkerURL:  strings.TrimRight(l.str("CALLGO_AGENT_WORKER_URL", "http://localhost:8090"), "/"),
-		ShutdownTimeout: l.duration("CALLGO_SHUTDOWN_TIMEOUT", 15*time.Second),
+		AgentWorkerURL:         strings.TrimRight(l.str("CALLGO_AGENT_WORKER_URL", "http://localhost:8090"), "/"),
+		AppURL:                 strings.TrimRight(l.str("CALLGO_APP_URL", "http://localhost:5173"), "/"),
+		SMTPHost:               l.str("SMTP_HOST", ""),
+		SMTPPort:               l.str("SMTP_PORT", "587"),
+		SMTPUser:               l.str("SMTP_USER", ""),
+		SMTPPass:               l.str("SMTP_PASS", ""),
+		SMTPFrom:               l.str("SMTP_FROM", "CallGo.mn <noreply@callgo.mn>"),
+		AccessTTL:              l.duration("CALLGO_ACCESS_TTL", 15*time.Minute),
+		RefreshTTL:             l.duration("CALLGO_REFRESH_TTL", 30*24*time.Hour),
+		RecordingsEnabled:      l.boolean("CALLGO_RECORDINGS", false),
+		RecordingsDriver:       l.str("CALLGO_RECORDINGS_DRIVER", "local"),
+		RecordingsDir:          l.str("CALLGO_RECORDINGS_DIR", "./data/recordings"),
+		RecordingRetentionDays: l.integer("CALLGO_RECORDING_RETENTION_DAYS", 90),
+		S3Endpoint:             l.str("S3_ENDPOINT", ""),
+		S3EgressEndpoint:       l.str("S3_EGRESS_ENDPOINT", ""),
+		S3PublicURL:            l.str("S3_PUBLIC_URL", ""),
+		S3Bucket:               l.str("S3_BUCKET", "callgo-recordings"),
+		S3AccessKey:            l.str("S3_ACCESS_KEY", ""),
+		S3SecretKey:            l.str("S3_SECRET_KEY", ""),
+		S3Region:               l.str("S3_REGION", "us-east-1"),
+		S3UseSSL:               l.boolean("S3_USE_SSL", false),
+		LiveKitPublicURL:       l.str("LIVEKIT_PUBLIC_URL", ""),
+		CostLLMPer1kTokensMNT:  int64(l.integer("CALLGO_COST_LLM_PER_1K_MNT", 5)),
+		CostSTTPerMinMNT:       int64(l.integer("CALLGO_COST_STT_PER_MIN_MNT", 15)),
+		CostTTSPer1kCharsMNT:   int64(l.integer("CALLGO_COST_TTS_PER_1K_CHARS_MNT", 2)),
+		CostSMSPerMsgMNT:       int64(l.integer("CALLGO_COST_SMS_PER_MSG_MNT", 60)),
+		ShutdownTimeout:        l.duration("CALLGO_SHUTDOWN_TIMEOUT", 15*time.Second),
 	}
 
 	// JWT secret.

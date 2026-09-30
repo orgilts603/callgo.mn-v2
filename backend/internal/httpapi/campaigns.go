@@ -266,6 +266,10 @@ func (s *server) controlCampaign(w http.ResponseWriter, r *http.Request, start b
 		if body.DryRunLimit != nil {
 			limit = *body.DryRunLimit
 		}
+		if err := s.checkCanStartCall(ctx, orgID); err != nil {
+			s.writeErr(w, r, err)
+			return
+		}
 		err = s.d.Campaigns.Start(ctx, c.ID, limit)
 	} else {
 		if c.Status != domain.CampaignRunning {

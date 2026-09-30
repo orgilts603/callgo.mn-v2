@@ -32,7 +32,7 @@ export function signIn(token = 'test-token') {
 
 export function resetAuth() {
   localStorage.clear()
-  useAuth.setState({ token: null, user: null, org: null, status: 'idle' })
+  useAuth.setState({ token: null, user: null, org: null, subscription: null, status: 'idle' })
 }
 
 export function renderRoutes(routes: RouteObject[], { path = '/', client = makeQueryClient() }: { path?: string; client?: QueryClient } = {}) {

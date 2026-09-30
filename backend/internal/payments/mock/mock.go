@@ -114,11 +114,19 @@ func (p *Provider) MarkPaid(ref string) error {
 }
 
 // VerifyCallback implements domain.PaymentProvider: the callback carries
-// ?payment_id=<uuid>, which is returned as the reference to resolve.
+// ?payment_id=<uuid>, which is returned as the reference to resolve. With
+// &paid=true the callback also simulates the customer having paid (the bank
+// confirming), so a dev flow can settle a payment with one request.
 func (p *Provider) VerifyCallback(_ context.Context, query map[string]string, _ []byte) (string, error) {
 	id := strings.TrimSpace(query["payment_id"])
 	if id == "" {
 		return "", errors.New("mock: callback without payment_id")
+	}
+	switch strings.ToLower(strings.TrimSpace(query["paid"])) {
+	case "1", "true", "yes":
+		if err := p.MarkPaid(id); err != nil {
+			return "", err
+		}
 	}
 	return id, nil
 }
