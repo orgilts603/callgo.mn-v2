@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -280,7 +279,7 @@ func (s *Store) ListTurns(ctx context.Context, callID uuid.UUID) ([]domain.Trans
 func (s *Store) Stats(ctx context.Context, orgID uuid.UUID) (domain.CallStats, error) {
 	var st domain.CallStats
 	err := s.db.QueryRow(ctx,
-		`WITH b AS (SELECT (date_trunc('day', now() AT TIME ZONE 'UTC')) AT TIME ZONE 'UTC' AS today)
+		`WITH b AS (SELECT date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS today)
 		 SELECT
 			count(*),
 			count(*) FILTER (WHERE c.status = ANY($2::text[])),
@@ -292,8 +291,8 @@ func (s *Store) Stats(ctx context.Context, orgID uuid.UUID) (domain.CallStats, e
 				/ NULLIF(count(*) FILTER (WHERE c.sentiment <> ''), 0), 0)::float8,
 			count(*) FILTER (WHERE c.direction = 'inbound' AND c.started_at >= b.today),
 			count(*) FILTER (WHERE c.direction = 'outbound' AND c.started_at >= b.today)
-		 FROM b LEFT JOIN calls c ON c.org_id = $1
-		 GROUP BY b.today`,
+		 FROM calls c CROSS JOIN b
+		 WHERE c.org_id = $1`,
 		orgID, activeStatuses).Scan(&st.TotalCalls, &st.ActiveCalls, &st.CompletedToday, &st.AvgDurationSec,
 		&st.PositiveRatio, &st.NegativeRatio, &st.InboundToday, &st.OutboundToday)
 	return st, dbErr("call stats", err)
@@ -342,10 +341,4 @@ func (s *Store) DailySeries(ctx context.Context, orgID uuid.UUID, days int) ([]d
 		d.Day = d.Day.UTC()
 		return &d, nil
 	})
-}
-
-// utcDay truncates t to the start of its UTC day.
-func utcDay(t time.Time) time.Time {
-	y, m, d := t.UTC().Date()
-	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
