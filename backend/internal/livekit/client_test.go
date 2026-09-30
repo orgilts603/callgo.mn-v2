@@ -282,12 +282,12 @@ func TestTransferCall(t *testing.T) {
 func TestListActiveRooms(t *testing.T) {
 	f := newFakeLiveKit()
 	c := newFakeClient(f)
-	for _, n := range []string{"call-11111111-1111-1111-1111-111111111111", "call_+97699112233_abc", "other-room", "callback"} {
+	for _, n := range []string{"call-11111111-1111-1111-1111-111111111111", "call-in_+97699112233_abc", "other-room", "callback"} {
 		f.rooms[n] = &lkproto.Room{Name: n}
 	}
 	rooms, err := c.ListActiveRooms(context.Background())
 	require.NoError(t, err)
-	assert.Equal(t, []string{"call-11111111-1111-1111-1111-111111111111", "call_+97699112233_abc"}, rooms)
+	assert.Equal(t, []string{"call-11111111-1111-1111-1111-111111111111", "call-in_+97699112233_abc"}, rooms)
 
 	f.failOn["ListRooms"] = twirp.NewError(twirp.Unavailable, "down")
 	_, err = c.ListActiveRooms(context.Background())

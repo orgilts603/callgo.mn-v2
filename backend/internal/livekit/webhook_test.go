@@ -39,7 +39,7 @@ func webhookBody(t *testing.T) []byte {
 	ev := &lkproto.WebhookEvent{
 		Event: WebhookParticipantJoined,
 		Id:    "EV_1",
-		Room:  &lkproto.Room{Name: "call_+97699112233_abc", Sid: "RM_1"},
+		Room:  &lkproto.Room{Name: "call-in_+97699112233_abc", Sid: "RM_1"},
 		Participant: &lkproto.ParticipantInfo{
 			Identity: "sip_+97699112233",
 			Kind:     lkproto.ParticipantInfo_SIP,
@@ -61,7 +61,7 @@ func TestParseWebhookRoundTrip(t *testing.T) {
 	ev, err := ParseWebhook(signedRequest(t, body, "key", "secret"), "key", "secret")
 	require.NoError(t, err)
 	assert.Equal(t, WebhookParticipantJoined, ev.GetEvent())
-	assert.Equal(t, "call_+97699112233_abc", ev.GetRoom().GetName())
+	assert.Equal(t, "call-in_+97699112233_abc", ev.GetRoom().GetName())
 	from, to, callID := SIPAttributes(ev.GetParticipant())
 	assert.Equal(t, "+97699112233", from)
 	assert.Equal(t, "+97677001234", to)

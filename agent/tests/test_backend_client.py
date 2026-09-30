@@ -202,7 +202,7 @@ async def test_retries_connection_errors_then_gives_up(respx_mock: respx.MockRou
         await client.aclose()
     assert route.call_count == 3
     assert len(delays) == 2
-    assert delays[1] > delays[0] * 1.0 or delays[1] >= 0.1  # exponential with jitter
+    assert 0.05 <= delays[0] <= 0.1 <= delays[1] <= 0.2  # exponential backoff with jitter
 
 
 @respx.mock(base_url=BASE)
@@ -228,11 +228,14 @@ async def test_lexicon_hit_posts_ids(respx_mock: respx.MockRouter) -> None:
     assert json.loads(route.calls.last.request.content) == {"ids": [str(a), str(b)]}
 
 
-def test_defaults_come_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_defaults_come_from_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     from callgo_agent import backend_client
 
     monkeypatch.setattr(backend_client.settings, "backend_url", "http://x.test:9/")
     monkeypatch.setattr(backend_client.settings, "agent_token", "tok")
-    client = BackendClient()
-    assert client.base_url == "http://x.test:9"
-    assert client._http.headers["X-Agent-Token"] == "tok"
+    with respx.mock(base_url="http://x.test:9") as router:
+        route = router.post("/internal/agent/lexicon-hit").mock(return_value=httpx.Response(204))
+        async with BackendClient() as client:
+            assert client.base_url == "http://x.test:9"
+            await client.lexicon_hit(["a"])
+    assert route.calls.last.request.headers["X-Agent-Token"] == "tok"

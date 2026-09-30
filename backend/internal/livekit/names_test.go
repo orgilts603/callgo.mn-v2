@@ -21,7 +21,7 @@ func TestRoomNameHelpers(t *testing.T) {
 	assert.True(t, ok, "any prefix")
 	assert.Equal(t, id, got)
 
-	for _, bad := range []string{"", "call-", "call_+97699112233_abc123", "call-not-a-uuid-at-all-xxxxxxxxxxxxxxxxxxxx", "call-" + uuid.Nil.String()} {
+	for _, bad := range []string{"", "call-", "call-in_+97699112233_abc123", "call-not-a-uuid-at-all-xxxxxxxxxxxxxxxxxxxx", "call-" + uuid.Nil.String()} {
 		_, ok := CallIDFromRoom(bad)
 		assert.False(t, ok, bad)
 	}

@@ -117,7 +117,7 @@ describe('app routes', () => {
 
   it('renders feature routes inside the shell and a 404 for unknown paths', async () => {
     signIn()
-    const routes = buildRoutes([{ path: 'lexicon', element: <div>LEXICON FEATURE</div>, handle: { crumb: 'Толь бичиг' } }])
+    const routes = buildRoutes([{ path: '/lexicon', element: <div>LEXICON FEATURE</div>, handle: { crumb: 'Толь бичиг' } }])
     const { router } = renderRoutes(routes, { path: '/lexicon' })
     expect(await screen.findByText('LEXICON FEATURE')).toBeInTheDocument()
     expect(screen.getByRole('complementary', { name: 'Үндсэн цэс' })).toBeInTheDocument()

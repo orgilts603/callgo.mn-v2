@@ -30,17 +30,17 @@ export function ErrorCard({ title, message, onRetry }: { title?: string; message
   )
 }
 
-interface State { error: Error | null }
+interface State { error: Error | null; resetKey?: unknown }
 
 /**
  * Catches render errors below it. When `resetKey` changes (e.g. the pathname) a
  * shown error is cleared without remounting healthy children.
  */
 export class ErrorBoundary extends Component<{ children: ReactNode; fallback?: ReactNode; resetKey?: unknown }, State> {
-  state: State = { error: null }
-  static getDerivedStateFromError(error: Error): State { return { error } }
-  componentDidUpdate(prev: { resetKey?: unknown }) {
-    if (this.state.error && prev.resetKey !== this.props.resetKey) this.setState({ error: null })
+  state: State = { error: null, resetKey: this.props.resetKey }
+  static getDerivedStateFromError(error: Error): Partial<State> { return { error } }
+  static getDerivedStateFromProps(props: { resetKey?: unknown }, state: State): Partial<State> | null {
+    return props.resetKey !== state.resetKey ? { error: null, resetKey: props.resetKey } : null
   }
   componentDidCatch(error: Error, info: ErrorInfo) { console.error('[ErrorBoundary]', error, info.componentStack) }
   render() {

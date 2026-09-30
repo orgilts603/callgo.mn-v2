@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { api } from '@/lib/api'
 import { CallDrawer } from '../CallDrawer'
 import { callKey, type CallDetail } from '../api'
-import { connectFakeLive, createWaveSurferMock, makeCall, makeQueryClient, makeTurn, resetLive, wrapper } from '../testUtils'
+import { connectFakeLive, makeCall, makeQueryClient, makeTurn, resetLive, wrapper } from '../testUtils'
 
 const ws = vi.hoisted(() => ({ mock: null as null | ReturnType<typeof import('../testUtils').createWaveSurferMock> }))
 vi.mock('wavesurfer.js', async () => {

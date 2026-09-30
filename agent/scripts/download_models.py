@@ -172,26 +172,32 @@ def _voice_repo_paths(voice: str, catalog: dict[str, Any] | None) -> tuple[str, 
     return f"{base}.onnx", f"{base}.onnx.json"
 
 
-def _install(src: Path, dst: Path, force: bool) -> None:
+def _fetch_to(repo: str, filename: str, dst: Path, force: bool) -> None:
+    """Download ``repo/filename`` straight into ``dst`` (no second copy in the HF cache)."""
     if dst.is_file() and dst.stat().st_size > 0 and not force:
         log.info("exists, skipping: %s", dst)
         return
+    from huggingface_hub import hf_hub_download
+
     dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.with_name(dst.name + ".part")
-    shutil.copyfile(src, tmp)
-    os.replace(tmp, dst)
+    staging = dst.parent / ".download"
+    try:
+        path = Path(hf_hub_download(repo, filename, local_dir=staging, force_download=force))
+        os.replace(path, dst)
+    except Exception as e:
+        raise DownloadError(f"failed to fetch {repo}/{filename}: {_network_hint(e)}") from e
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def download_piper_voice(
     voice: str, dest: Path, *, catalog: dict[str, Any] | None = None, force: bool = False
 ) -> Path:
     onnx_path, cfg_path = _voice_repo_paths(voice, catalog)
-    log.info("downloading piper voice %s …", voice)
-    model_src = _hf_file(PIPER_REPO, onnx_path)
-    cfg_src = _hf_file(PIPER_REPO, cfg_path)
+    log.info("downloading piper voice %s -> %s", voice, dest)
     model_dst = dest / f"{voice}.onnx"
-    _install(model_src, model_dst, force)
-    _install(cfg_src, dest / f"{voice}.onnx.json", force)
+    _fetch_to(PIPER_REPO, onnx_path, model_dst, force)
+    _fetch_to(PIPER_REPO, cfg_path, dest / f"{voice}.onnx.json", force)
     return model_dst
 
 

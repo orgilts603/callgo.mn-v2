@@ -8,6 +8,7 @@ import { HttpError } from '@/lib/api'
 
 export const DEMO_EMAIL = 'admin@callgo.mn'
 export const DEMO_PASSWORD = 'admin1234'
+const YEAR = new Date().getFullYear()
 
 function errorMessage(err: unknown): string {
   if (err instanceof HttpError) {
@@ -107,7 +108,7 @@ export default function LoginPage() {
           <span>demo:</span>
           <span className="mono text-[var(--fg-muted)]">{DEMO_EMAIL} / {DEMO_PASSWORD}</span>
         </button>
-        <p className="mt-8 text-center text-[11px] text-[var(--fg-subtle)]">© {new Date().getFullYear()} CallGo.mn</p>
+        <p className="mt-8 text-center text-[11px] text-[var(--fg-subtle)]">© {YEAR} CallGo.mn</p>
       </div>
     </div>
   )

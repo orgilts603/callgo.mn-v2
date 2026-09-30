@@ -36,7 +36,7 @@ func RoomNameForCall(id uuid.UUID) string {
 
 // CallIDFromRoom extracts the call UUID from a room named <prefix><uuid>
 // (any prefix, e.g. "call-" from RoomNameForCall). Inbound rooms created by
-// the dispatch rule ("call_<caller>_<random>") carry no call ID and return
+// the dispatch rule ("call-in_<caller>_<random>") carry no call ID and return
 // false; resolve those with CallRepository.GetCallByRoom.
 func CallIDFromRoom(room string) (uuid.UUID, bool) {
 	const uuidLen = 36

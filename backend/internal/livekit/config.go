@@ -66,7 +66,7 @@ type Config struct {
 
 	// RoomPrefix prefixes every call room (default "call-"). Outbound rooms
 	// are RoomPrefix+<callID>; inbound rooms created by the dispatch rule are
-	// <RoomPrefix without trailing "-"/"_">_<caller>_<random>.
+	// RoomPrefix+"in_<caller>_<random>" (e.g. "call-in_+97699112233_Xy12").
 	RoomPrefix string
 	// RingTimeout is the default ring window for outbound calls (default 30s).
 	RingTimeout time.Duration
@@ -122,14 +122,11 @@ func (c Config) validate() error {
 }
 
 // inboundRoomPrefix is the prefix LiveKit's individual dispatch rule gets.
-// LiveKit appends "_<caller>_<random>", so "call-" becomes "call" and the
-// room reads "call_+97699112233_abc123".
+// LiveKit appends "_<caller>_<random>", so with the default prefix inbound
+// rooms read "call-in_+97699112233_Xy12" — they still start with RoomPrefix,
+// which is what webhook handlers and ListActiveRooms match on.
 func (c Config) inboundRoomPrefix() string {
-	p := strings.TrimRight(c.RoomPrefix, "-_")
-	if p == "" {
-		return strings.TrimRight(DefaultRoomPrefix, "-_")
-	}
-	return p
+	return c.RoomPrefix + "in"
 }
 
 // parseTransport maps a config string to the protobuf enum.

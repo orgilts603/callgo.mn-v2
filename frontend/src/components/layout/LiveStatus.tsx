@@ -9,7 +9,6 @@ const wsMeta: Record<WsStatus, { label: string; dot: string; text: string; title
   connecting: { label: 'Холбогдож байна', dot: 'bg-[var(--warning)] animate-pulse', text: 'text-[var(--warning-fg)]', title: 'Шууд мэдээллийн сувагт холбогдож байна' },
   closed: { label: 'Салсан', dot: 'bg-[var(--danger)]', text: 'text-[var(--danger-fg)]', title: 'Шууд мэдээллийн холболт тасарсан. Автоматаар дахин холбогдоно.' },
 }
-export function wsStatusLabel(s: WsStatus) { return wsMeta[s].label }
 
 /** Pill showing the live WebSocket status (useLive().status). */
 export function LiveStatusPill({ className }: { className?: string }) {

@@ -195,3 +195,37 @@ def test_google_locale() -> None:
     assert pipeline.google_locale("mn") == "mn-MN"
     assert pipeline.google_locale("mn_MN") == "mn-MN"
     assert pipeline.google_locale("xx") == "xx"
+
+
+# ---- scripts/download_models.py (pure helpers, offline) ---------------------------
+
+
+def _download_script() -> Any:
+    import importlib.util
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "download_models.py"
+    spec = importlib.util.spec_from_file_location("download_models", path)
+    assert spec and spec.loader
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_download_pick_voice_prefers_mongolian_then_fallback() -> None:
+    dm = _download_script()
+    catalog = {"kk_KZ-issai-high": {}, "ru_RU-irina-medium": {}, "en_US-lessac-medium": {}}
+    assert dm.pick_voice(catalog) == ("kk_KZ-issai-high", False)
+    catalog |= {"mn_MN-a-high": {}, "mn_MN-b-medium": {}}
+    assert dm.pick_voice(catalog) == ("mn_MN-b-medium", True)
+
+
+def test_download_voice_repo_paths() -> None:
+    dm = _download_script()
+    assert dm._voice_repo_paths("kk_KZ-issai-high", None) == (
+        "kk/kk_KZ/issai/high/kk_KZ-issai-high.onnx",
+        "kk/kk_KZ/issai/high/kk_KZ-issai-high.onnx.json",
+    )
+    with pytest.raises(ValueError):
+        dm._voice_repo_paths("not a voice", None)
+    assert dm.whisper_repo_id("large-v3") == "Systran/faster-whisper-large-v3"
+    assert dm.main(["whisper", "--model", "definitely-not-a-model"]) == 2

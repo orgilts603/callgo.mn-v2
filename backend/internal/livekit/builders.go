@@ -146,6 +146,8 @@ func buildDispatchRule(cfg Config, n *domain.SIPNumber, inboundTrunkID string) (
 			AttrDirection:   string(domain.DirectionInbound),
 		},
 		RoomConfig: &lkproto.RoomConfiguration{
+			// Room metadata lets room_started webhooks resolve the number.
+			Metadata:         agentMD,
 			DepartureTimeout: roomDepartureTimeout,
 			Agents: []*lkproto.RoomAgentDispatch{{
 				AgentName: cfg.AgentName,

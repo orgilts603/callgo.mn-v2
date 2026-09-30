@@ -490,17 +490,16 @@ func (c *Client) resolveSIPIdentity(ctx context.Context, room, participant strin
 }
 
 // ListActiveRooms returns the names of LiveKit rooms that belong to CallGo
-// calls (outbound "<prefix><uuid>" and inbound "<prefix>_..." rooms).
+// calls, i.e. start with RoomPrefix (outbound "call-<uuid>" and inbound
+// "call-in_<caller>_<random>").
 func (c *Client) ListActiveRooms(ctx context.Context) ([]string, error) {
 	res, err := c.rooms.ListRooms(ctx, &lkproto.ListRoomsRequest{})
 	if err != nil {
 		return nil, fmt.Errorf("livekit: list rooms: %w", err)
 	}
-	inbound := c.cfg.inboundRoomPrefix() + "_"
 	names := make([]string, 0, len(res.GetRooms()))
 	for _, r := range res.GetRooms() {
-		name := r.GetName()
-		if strings.HasPrefix(name, c.cfg.RoomPrefix) || strings.HasPrefix(name, inbound) {
+		if name := r.GetName(); strings.HasPrefix(name, c.cfg.RoomPrefix) {
 			names = append(names, name)
 		}
 	}

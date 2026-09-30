@@ -1,0 +1,88 @@
+# =============================================================================
+# CallGo.mn — livekit-server configuration (template)
+# LiveKit серверийн тохиргоо (загвар файл)
+#
+# This file is a TEMPLATE: tokens of the form ${NAME} are replaced at container
+# start by infra/livekit/entrypoint.sh from environment variables supplied by
+# docker compose (values come from the repo-root .env). Only these tokens are
+# substituted:
+#   ${LIVEKIT_API_KEY}  ${LIVEKIT_API_SECRET}  ${LIVEKIT_WEBHOOK_URL}  ${LIVEKIT_REDIS_ADDRESS}
+# Rendering keeps the API key/secret and the webhook signing key in ONE place
+# (.env), so the backend's webhook verifier and livekit-server can never drift.
+# (.env дотор түлхүүрээ нэг л газар тохируулна.)
+#
+# Reference: third_party/livekit/config-sample.yaml
+# =============================================================================
+
+# Main TCP port: HTTP / WebSocket signalling and the Twirp server API
+# (RoomService, SIP, AgentDispatch, Egress). Put TLS in front of it (Caddy)
+# if browsers or remote agents ever connect from outside the VPS.
+port: 7880
+
+# Redis turns on the distributed mode and is REQUIRED for livekit-sip and
+# egress: they talk to livekit-server over the Redis psrpc bus.
+# Redis нь livekit-sip болон egress-тэй харилцах шугам (заавал хэрэгтэй).
+redis:
+  address: ${LIVEKIT_REDIS_ADDRESS}
+
+# WebRTC media. Every participant (SIP caller bridged by livekit-sip, the AI
+# agent, optional browser listeners) holds an ICE/UDP port from this range;
+# each call needs ~4 ports, so 50000-50100 comfortably serves ~25 concurrent
+# calls on one node. Widen BOTH this range and the compose port mapping for
+# more. (Нэг дуудлагад ~4 UDP порт шаардлагатай.)
+rtc:
+  port_range_start: 50000
+  port_range_end: 50100
+  # ICE over TCP fallback for clients behind UDP-hostile firewalls.
+  tcp_port: 7881
+  # Alternative to the port range: a single UDP mux port. To use it, delete
+  # port_range_start/end above and uncomment (7882/udp is already published).
+  # udp_port: 7882
+  #
+  # The container runs on a Docker bridge network. Discover the VPS public IP
+  # via STUN and advertise it to external clients, AND keep advertising the
+  # container-internal IP so livekit-sip, egress and the agent (same Docker
+  # network) connect directly without hair-pinning through the public IP.
+  use_external_ip: true
+  advertise_internal_ip: true
+  # Self-ping through the public IP fails on some clouds (1:1 NAT without
+  # hairpin). The STUN result is trustworthy on a normal VPS, so skip it.
+  skip_external_ip_validation: true
+  # If STUN is blocked or returns the wrong address, set use_external_ip:
+  # false and pin the public IP instead:
+  # node_ip: 203.0.113.10
+
+# API key / secret pairs (JWT signing). Secret must be >= 32 chars in prod.
+# API түлхүүр ба нууц үг (.env-ээс орно).
+keys:
+  ${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}
+
+logging:
+  level: info
+  # pion (WebRTC stack) is very chatty below "error".
+  pion_level: error
+  json: false
+
+# Defaults for every room. Call rooms are created implicitly by livekit-sip
+# (inbound dispatch rule) or by the backend (outbound, CreateRoom with agent
+# dispatch); the backend sets tighter per-room timeouts itself.
+room:
+  auto_create: true
+  # Close a room nobody joined after 5 min (e.g. failed outbound dial).
+  empty_timeout: 300
+  # Close a room 20 s after the last participant (caller or agent) left.
+  departure_timeout: 20
+  # Phone calls are audio only; opus is what the agent and livekit-sip use.
+  enabled_codecs:
+    - mime: audio/opus
+    - mime: audio/red
+
+# Webhooks: room_started, participant_joined/left, room_finished and
+# egress_ended are POSTed to the CallGo backend, signed with api_key.
+# The backend verifies them with LIVEKIT_API_KEY / LIVEKIT_API_SECRET
+# (see backend internal/livekit webhook receiver, docs/API.md).
+# Webhook: дуудлагын төлөвийг backend рүү мэдэгдэнэ.
+webhook:
+  api_key: ${LIVEKIT_API_KEY}
+  urls:
+    - ${LIVEKIT_WEBHOOK_URL}

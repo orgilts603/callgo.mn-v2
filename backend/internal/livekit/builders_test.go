@@ -44,7 +44,7 @@ func TestConfigDefaultsAndValidate(t *testing.T) {
 	assert.Equal(t, "call-", cfg.RoomPrefix)
 	assert.Equal(t, 30*time.Second, cfg.RingTimeout)
 	assert.Equal(t, 30*time.Minute, cfg.MaxCallDuration)
-	assert.Equal(t, "call", cfg.inboundRoomPrefix())
+	assert.Equal(t, "call-in", cfg.inboundRoomPrefix())
 	require.NoError(t, cfg.validate())
 
 	err := Config{}.withDefaults().validate()
@@ -134,7 +134,7 @@ func TestBuildDispatchRule(t *testing.T) {
 
 	ind := r.GetRule().GetDispatchRuleIndividual()
 	require.NotNil(t, ind, "individual rule")
-	assert.Equal(t, "call", ind.RoomPrefix)
+	assert.Equal(t, "call-in", ind.RoomPrefix)
 	assert.False(t, ind.NoRandomness)
 
 	require.NotNil(t, r.RoomConfig)
@@ -142,6 +142,7 @@ func TestBuildDispatchRule(t *testing.T) {
 	agent := r.RoomConfig.Agents[0]
 	assert.Equal(t, "callgo", agent.AgentName)
 	assert.JSONEq(t, `{"sipNumberId":"11111111-2222-3333-4444-555555555555","direction":"inbound"}`, agent.Metadata)
+	assert.Equal(t, agent.Metadata, r.RoomConfig.Metadata)
 	assert.Equal(t, n.ID.String(), r.Attributes[AttrSIPNumberID])
 	assert.Equal(t, "inbound", r.Attributes[AttrDirection])
 	require.NoError(t, r.Validate())
