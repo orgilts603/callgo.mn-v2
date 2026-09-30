@@ -1,0 +1,19 @@
+# third-party reference clones (fetch with scripts/fetch-third-party.sh)
+third_party/
+# node
+node_modules/
+frontend/dist/
+# python
+agent/.venv/
+agent/models/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+# go
+backend/bin/
+# env
+.env
+.env.local
+*.log

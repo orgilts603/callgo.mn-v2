@@ -1,0 +1,94 @@
+// Mirrors backend/internal/domain/domain.go (json tags). FROZEN CONTRACT — do not edit.
+export type UUID = string
+export type ISODate = string
+
+export type Role = 'owner' | 'admin' | 'operator'
+export interface Organization { id: UUID; name: string; slug: string; createdAt: ISODate }
+export interface User { id: UUID; orgId: UUID; email: string; name: string; role: Role; createdAt: ISODate }
+
+export type LLMProvider = 'openai' | 'anthropic' | 'google' | 'groq' | 'ollama' | 'openai_compatible'
+export interface LLMConfig {
+  id: UUID; orgId: UUID; name: string; provider: LLMProvider; model: string; baseUrl?: string
+  apiKeyHint?: string; temperature: number; maxTokens: number; isDefault: boolean; fallbackId?: UUID | null
+  createdAt: ISODate; updatedAt: ISODate
+}
+export interface LLMCatalogEntry { provider: LLMProvider; label: string; models: string[]; needsApiKey: boolean; needsBaseUrl: boolean }
+
+export interface AgentProfile {
+  id: UUID; orgId: UUID; name: string; systemPrompt: string; greeting: string; language: string
+  llmConfigId?: UUID | null; sttProvider: string; sttModel: string; ttsProvider: string; ttsVoice: string
+  maxDurationSec: number; tools: string[]; transferNumber?: string; createdAt: ISODate; updatedAt: ISODate
+}
+
+export interface SIPNumber {
+  id: UUID; orgId: UUID; number: string; label: string; inboundTrunkId?: string; outboundTrunkId?: string
+  dispatchRuleId?: string; asteriskEndpoint?: string; agentProfileId?: UUID | null; allowInbound: boolean
+  allowOutbound: boolean; active: boolean; createdAt: ISODate; updatedAt: ISODate
+}
+
+export interface Contact {
+  id: UUID; orgId: UUID; phone: string; name: string; tags: string[]; meta: Record<string, string>
+  createdAt: ISODate; updatedAt: ISODate
+}
+
+export type CallDirection = 'inbound' | 'outbound'
+export type CallStatus = 'queued' | 'ringing' | 'active' | 'completed' | 'failed' | 'no_answer' | 'busy' | 'voicemail'
+export const TERMINAL_STATUSES: CallStatus[] = ['completed', 'failed', 'no_answer', 'busy', 'voicemail']
+export type Sentiment = 'positive' | 'neutral' | 'negative' | ''
+
+export interface Call {
+  id: UUID; orgId: UUID; contactId?: UUID | null; campaignId?: UUID | null; sipNumberId?: UUID | null
+  agentProfileId?: UUID | null; direction: CallDirection; status: CallStatus; fromNumber: string; toNumber: string
+  roomName: string; sipCallId?: string; participantId?: string; startedAt: ISODate; answeredAt?: ISODate | null
+  endedAt?: ISODate | null; durationSec: number; recordingUrl?: string; summary?: string; sentiment?: Sentiment
+  intent?: string; endReason?: string; llmModelUsed?: string; metadata?: Record<string, unknown>
+  createdAt: ISODate; updatedAt: ISODate
+}
+
+export type Speaker = 'customer' | 'agent' | 'human'
+export interface TranscriptTurn {
+  id: UUID; callId: UUID; seq: number; speaker: Speaker; text: string; rawText?: string; confidence: number
+  startMs: number; endMs: number; isFinal: boolean; createdAt: ISODate
+}
+
+export type CampaignStatus = 'draft' | 'running' | 'paused' | 'completed'
+export interface Campaign {
+  id: UUID; orgId: UUID; name: string; sipNumberId?: UUID | null; agentProfileId?: UUID | null; script: string
+  status: CampaignStatus; concurrency: number; maxAttempts: number; total: number; completed: number; failed: number
+  createdAt: ISODate; updatedAt: ISODate
+}
+export type CampaignTargetStatus = 'pending' | 'calling' | 'done' | 'failed'
+export interface CampaignTarget {
+  id: UUID; campaignId: UUID; contactId?: UUID | null; phone: string; name: string; vars?: Record<string, string>
+  status: CampaignTargetStatus; attempts: number; callId?: UUID | null; lastError?: string; nextTryAt?: ISODate | null
+  updatedAt: ISODate
+}
+
+export type LexiconScope = 'stt' | 'tts' | 'both'
+export interface LexiconCorrection {
+  id: UUID; orgId: UUID; wrong: string; correct: string; phonetic?: string; scope: LexiconScope
+  sourceTurnId?: UUID | null; createdBy?: UUID | null; hitCount: number; createdAt: ISODate
+}
+
+export interface CallStats {
+  totalCalls: number; activeCalls: number; completedToday: number; avgDurationSec: number
+  positiveRatio: number; negativeRatio: number; inboundToday: number; outboundToday: number
+}
+export interface DailyCallCount { day: ISODate; inbound: number; outbound: number; completed: number; failed: number }
+
+export type EventType =
+  | 'call.started' | 'call.ringing' | 'call.answered' | 'call.ended' | 'call.updated'
+  | 'transcript.partial' | 'transcript.final' | 'agent.state' | 'campaign.progress' | 'lexicon.updated' | 'system'
+export type AgentState = 'initializing' | 'listening' | 'thinking' | 'speaking' | 'idle'
+
+export interface LiveEvent<P = unknown> { id: string; type: EventType; orgId: UUID; callId?: UUID | null; at: ISODate; payload: P }
+export interface CallEventPayload { call: Call; endReason?: string; summary?: string; sentiment?: Sentiment; intent?: string }
+export interface TranscriptPartialPayload { speaker: Speaker; text: string; startMs: number }
+export interface TranscriptFinalPayload { turn: TranscriptTurn }
+export interface AgentStatePayload { state: AgentState; llmModel?: string }
+export interface CampaignProgressPayload { campaign: Campaign; target?: CampaignTarget | null }
+export interface LexiconUpdatedPayload { correction: LexiconCorrection; action: 'created' | 'updated' | 'deleted' }
+export interface SystemPayload { hello?: boolean; activeCalls?: Call[]; message?: string }
+
+export interface ListResponse<T> { items: T[]; total: number }
+export interface ApiError { error: { code: string; message: string } }
