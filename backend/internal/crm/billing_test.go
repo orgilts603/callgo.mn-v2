@@ -194,7 +194,7 @@ func TestUsageSummary(t *testing.T) {
 	require.Zero(t, sum.OverageMinutes)
 	require.Zero(t, sum.OverageMNT)
 
-	empty, err := s.SummarizeUsage(ctx, org.ID, end, end.AddDate(0, 1, 0))
+	empty, err := s.SummarizeUsage(ctx, org.ID, end.AddDate(0, 1, 0), end.AddDate(0, 2, 0))
 	require.NoError(t, err)
 	require.Zero(t, empty.Calls)
 	require.Zero(t, empty.Minutes)
@@ -213,7 +213,7 @@ func TestUsageSummary(t *testing.T) {
 func TestListUsageAndActiveCalls(t *testing.T) {
 	ctx, s := setup(t)
 	org := newOrg(t, ctx, s, "lu")
-	start := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	start := time.Date(2025, 9, 1, 0, 0, 0, 0, time.UTC)
 	end := start.AddDate(0, 1, 0)
 
 	recs := make([]domain.UsageRecord, 0, 6)
