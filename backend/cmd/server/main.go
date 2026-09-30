@@ -45,6 +45,7 @@ func run() error {
 		return fmt.Errorf("config: %w", err)
 	}
 	log := config.NewLogger(cfg)
+	cfg.LogWarnings(log)
 	log.Info().Str("env", cfg.Env).Str("addr", cfg.HTTPAddr).Msg("callgo backend starting")
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -75,11 +76,21 @@ func run() error {
 	hub := live.NewHub(log, live.HubOptions{})
 	defer hub.Close()
 
+	// ---- campaign engine (declared early so the mock bridge can reach it) ---
+	var engine *campaign.Engine
+
 	// ---- telephony ---------------------------------------------------------
 	var tel domain.Telephony
 	if cfg.MockTelephony {
 		log.Warn().Msg("telephony: MOCK mode (CALLGO_MOCK_TELEPHONY=true) — no real SIP calls")
-		tel = lk.NewMock(lk.MockOptions{})
+		bridge := &mockBridge{store: store, bus: hub, log: log, engine: func() *campaign.Engine { return engine }}
+		mock := lk.NewMock(lk.MockOptions{
+			RingDelay:    3 * time.Second,
+			CallDuration: 25 * time.Second,
+			OnEvent:      bridge.onEvent,
+		})
+		defer mock.Close()
+		tel = mock
 	} else {
 		client, err := lk.NewClient(lk.Config{
 			URL:                        cfg.LiveKit.URL,
@@ -103,11 +114,12 @@ func run() error {
 	// ---- domain services ---------------------------------------------------
 	lex := lexicon.NewService(store, hub, log)
 
-	engine := campaign.NewEngine(store, store, store, store, store, tel, hub, campaign.Options{
+	engine = campaign.NewEngine(store, store, store, store, store, tel, hub, campaign.Options{
 		PollInterval:         cfg.Campaign.PollInterval,
 		RetryBackoff:         cfg.Campaign.RetryBackoff,
 		RingTimeout:          cfg.SIP.RingTimeout,
 		MaxGlobalConcurrency: cfg.Campaign.MaxConcurrency,
+		MaxCallDuration:      cfg.SIP.MaxCallDuration,
 	}, log)
 	go func() {
 		if err := engine.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -117,26 +129,28 @@ func run() error {
 
 	// ---- HTTP API ----------------------------------------------------------
 	handler := httpapi.New(httpapi.Deps{
-		Orgs:          store,
-		SIPNumbers:    store,
-		AgentProfiles: store,
-		LLMConfigs:    store,
-		Calls:         store,
-		Contacts:      store,
-		Campaigns:     store,
-		Lexicons:      store,
+		Org:           store,
+		SIPNumber:     store,
+		AgentProfile:  store,
+		LLMConfig:     store,
+		Call:          store,
+		Contact:       store,
+		Campaign:      store,
+		Lexicon:       store,
 		Telephony:     tel,
 		Bus:           hub,
-		Hub:           hub,
-		CampaignCtl:   engine,
-		Targets:       csvAdapter{},
-		Lexicon:       lexAdapter{lex},
+		Live:          hub,
+		Campaigns:     engine,
+		TargetParser:  csvAdapter{},
+		ContactParser: csvAdapter{},
+		LexiconEngine: lexAdapter{lex},
 		LLMTester:     llmtest.NewProxy(cfg.AgentWorkerURL, &http.Client{Timeout: 30 * time.Second}),
+		Ready:         pool.Ping,
 	}, httpapi.Config{
 		JWTSecret:        []byte(cfg.JWTSecret),
 		AgentToken:       cfg.AgentToken,
-		LiveKitAPIKey:    cfg.LiveKit.APIKey,
-		LiveKitAPISecret: cfg.LiveKit.APISecret,
+		LiveKitAPIKey:    cfg.LiveKit.WebhookKeyPair.APIKey,
+		LiveKitAPISecret: cfg.LiveKit.WebhookKeyPair.APISecret,
 		AllowSignup:      cfg.AllowSignup,
 		CORSOrigins:      cfg.CORSOrigins,
 	}, log)
@@ -144,8 +158,12 @@ func run() error {
 	// ---- optional simulator -----------------------------------------------
 	if cfg.Simulator {
 		log.Warn().Msg("call simulator ENABLED (CALLGO_SIMULATOR=true) — generating fake calls")
-		sim := live.NewSimulator(store, store, hub, org.ID, live.SimOptions{Interval: cfg.SimulatorInterval})
-		go sim.Run(ctx)
+		sim := live.NewSimulator(store, store, hub, org.ID, live.SimOptions{Interval: cfg.SimulatorInterval, Logger: log})
+		go func() {
+			if err := sim.Run(ctx); err != nil {
+				log.Error().Err(err).Msg("simulator stopped")
+			}
+		}()
 	}
 
 	srv := &http.Server{
@@ -175,6 +193,7 @@ func run() error {
 
 // ---- adapters between packages built independently -------------------------
 
+// csvAdapter bridges internal/csvimport to the httpapi parser interfaces.
 type csvAdapter struct{}
 
 func (csvAdapter) ParseTargets(r io.Reader) (httpapi.ParsedTargets, error) {
@@ -182,13 +201,26 @@ func (csvAdapter) ParseTargets(r io.Reader) (httpapi.ParsedTargets, error) {
 	if err != nil {
 		return httpapi.ParsedTargets{}, err
 	}
-	out := httpapi.ParsedTargets{Targets: res.Targets, Skipped: res.Skipped}
-	for _, e := range res.Errors {
-		out.Errors = append(out.Errors, httpapi.RowError{Row: e.Row, Message: e.Message})
-	}
-	return out, nil
+	return httpapi.ParsedTargets{Targets: res.Targets, Skipped: res.Skipped, Errors: rowErrors(res.Errors)}, nil
 }
 
+func (csvAdapter) ParseContacts(r io.Reader) (httpapi.ParsedContacts, error) {
+	res, err := csvimport.ParseContacts(r, csvimport.Options{})
+	if err != nil {
+		return httpapi.ParsedContacts{}, err
+	}
+	return httpapi.ParsedContacts{Contacts: res.Contacts, Skipped: res.Skipped, Errors: rowErrors(res.Errors)}, nil
+}
+
+func rowErrors(in []csvimport.RowError) []httpapi.RowError {
+	out := make([]httpapi.RowError, 0, len(in))
+	for _, e := range in {
+		out = append(out, httpapi.RowError{Row: e.Row, Message: e.Message})
+	}
+	return out
+}
+
+// lexAdapter bridges internal/lexicon to the httpapi Lexicon interface.
 type lexAdapter struct{ svc *lexicon.Service }
 
 func (a lexAdapter) Apply(ctx context.Context, orgID uuid.UUID, text string) (string, []httpapi.LexiconHit, error) {
@@ -205,4 +237,85 @@ func (a lexAdapter) Apply(ctx context.Context, orgID uuid.UUID, text string) (st
 
 func (a lexAdapter) Invalidate(orgID uuid.UUID) { a.svc.Invalidate(orgID) }
 
-var _ zerolog.Logger // keep import stable while adapters evolve
+// mockBridge turns simulated telephony state changes into persisted call
+// state and live events, mirroring what LiveKit webhooks + the agent worker
+// do in a real deployment. It lets the Live Desk and campaign engine be
+// exercised end-to-end without a SIP trunk.
+type mockBridge struct {
+	store  *crm.Store
+	bus    domain.EventBus
+	log    zerolog.Logger
+	engine func() *campaign.Engine
+}
+
+func (b *mockBridge) onEvent(roomName, evt string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	call, err := b.store.GetCallByRoom(ctx, roomName)
+	if err != nil {
+		b.log.Debug().Err(err).Str("room", roomName).Str("event", evt).Msg("mock event for unknown call")
+		return
+	}
+	if call.Status.IsTerminal() {
+		return
+	}
+	now := time.Now().UTC()
+	var evType domain.EventType
+	switch evt {
+	case lk.MockEventRinging:
+		call.Status = domain.StatusRinging
+		evType = domain.EventCallRinging
+	case lk.MockEventAnswered:
+		call.Status = domain.StatusActive
+		call.AnsweredAt = &now
+		evType = domain.EventCallAnswered
+	case lk.MockEventEnded:
+		call.Status = domain.StatusCompleted
+		call.EndReason = "hangup_customer"
+		call.Summary = "Туршилтын дуудлага (mock telephony) амжилттай дууслаа."
+		call.Sentiment = domain.SentimentNeutral
+		call.Intent = "test"
+		b.finish(call, now)
+		evType = domain.EventCallEnded
+	case lk.MockEventBusy:
+		call.Status = domain.StatusBusy
+		call.EndReason = "busy"
+		b.finish(call, now)
+		evType = domain.EventCallEnded
+	case lk.MockEventNoAnswer:
+		call.Status = domain.StatusNoAnswer
+		call.EndReason = "no_answer"
+		b.finish(call, now)
+		evType = domain.EventCallEnded
+	case lk.MockEventFailed:
+		call.Status = domain.StatusFailed
+		call.EndReason = "failed"
+		b.finish(call, now)
+		evType = domain.EventCallEnded
+	default:
+		return
+	}
+	if err := b.store.UpdateCall(ctx, call); err != nil {
+		b.log.Error().Err(err).Str("call", call.ID.String()).Msg("mock bridge: update call")
+		return
+	}
+	b.bus.Publish(ctx, domain.Event{
+		Type:    evType,
+		OrgID:   call.OrgID,
+		CallID:  &call.ID,
+		At:      now,
+		Payload: map[string]any{"call": call, "endReason": call.EndReason},
+	})
+	if call.Status.IsTerminal() && call.CampaignID != nil {
+		if eng := b.engine(); eng != nil {
+			eng.OnCallEnded(ctx, call)
+		}
+	}
+}
+
+func (b *mockBridge) finish(call *domain.Call, now time.Time) {
+	call.EndedAt = &now
+	if call.AnsweredAt != nil {
+		call.DurationSec = int(now.Sub(*call.AnsweredAt).Seconds())
+	}
+}
