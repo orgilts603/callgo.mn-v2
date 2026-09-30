@@ -22,8 +22,8 @@ const campLabel: Record<CampaignStatus, string> = { draft: 'Ноорог', runni
 export function CampaignStatusBadge({ status }: { status: CampaignStatus }) {
   return <Badge tone={campTone[status]} dot pulse={status === 'running'}>{campLabel[status]}</Badge>
 }
-const agentTone: Record<AgentState, BadgeTone> = { initializing: 'neutral', listening: 'neutral', thinking: 'warning', speaking: 'success', idle: 'neutral' }
-const agentLabel: Record<AgentState, string> = { initializing: 'Бэлдэж байна', listening: 'Сонсож байна', thinking: 'Бодож байна', speaking: 'Ярьж байна', idle: 'Хүлээж байна' }
+const agentTone: Record<AgentState, BadgeTone> = { initializing: 'neutral', listening: 'neutral', thinking: 'warning', speaking: 'success', idle: 'neutral', handoff: 'warning' }
+const agentLabel: Record<AgentState, string> = { initializing: 'Бэлдэж байна', listening: 'Сонсож байна', thinking: 'Бодож байна', speaking: 'Ярьж байна', idle: 'Хүлээж байна', handoff: 'Оператор' }
 export function AgentStateBadge({ state }: { state: AgentState }) {
   return <Badge tone={agentTone[state]} dot pulse={state === 'speaking' || state === 'thinking'}>{agentLabel[state]}</Badge>
 }

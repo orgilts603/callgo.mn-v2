@@ -121,7 +121,7 @@ describe('SIPNumberDialog', () => {
 
   it('sends switches state on edit including active', async () => {
     mocked.put.mockResolvedValue({ sipNumber: {} })
-    const n: SIPNumber = { id: 's1', orgId: 'o', number: '+97670001234', label: 'Main', allowInbound: true, allowOutbound: true, active: true, createdAt: '', updatedAt: '' }
+    const n: SIPNumber = { id: 's1', orgId: 'o', number: '+97670001234', label: 'Main', allowInbound: true, allowOutbound: true, active: true, routing: { businessHours: { timezone: '', weekdays: [], startTime: '', endTime: '', pacePerMinute: 0 }, afterHoursMessage: '', menuPrompt: '', menu: [], menuTimeoutSec: 8, menuRepeat: 1 }, createdAt: '', updatedAt: '' }
     wrap(<SIPNumberDialog open onClose={vi.fn()} initial={n} profiles={[]} />)
     fireEvent.click(screen.getByRole('switch', { name: 'Явах дуудлага' }))
     fireEvent.click(screen.getByRole('switch', { name: 'Идэвхтэй' }))
