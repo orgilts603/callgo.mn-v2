@@ -156,7 +156,9 @@ def _resample_int16(pcm: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray
             raise RuntimeError("resampler produced no audio")
         return np.concatenate([np.frombuffer(f.data, dtype=np.int16) for f in out])
     except Exception:  # pragma: no cover - native resampler unavailable
-        logger.warning("rtc.AudioResampler failed, falling back to linear resampling")
+        logger.warning(
+            "rtc.AudioResampler failed, falling back to linear resampling", exc_info=True
+        )
         resampled = _resample_linear(pcm.astype(np.float32), src_rate, dst_rate)
         return np.clip(np.rint(resampled), -32768, 32767).astype(np.int16)
 
@@ -291,9 +293,7 @@ class WhisperSTT(stt.STT):
         kwargs.setdefault("language", profile.language or settings.default_language)
         return cls(**kwargs)
 
-    def streaming(
-        self, vad: lk_vad.VAD | None = None, **vad_options: Any
-    ) -> stt.StreamAdapter:
+    def streaming(self, vad: lk_vad.VAD | None = None, **vad_options: Any) -> stt.StreamAdapter:
         """Wrap in ``stt.StreamAdapter`` driven by a VAD (Silero by default).
 
         ``vad_options`` are forwarded to ``silero.VAD.load`` when no ``vad`` is given.
@@ -388,9 +388,7 @@ class WhisperSTT(stt.STT):
             except Exception:
                 logger.exception("failed to prewarm faster-whisper model %s", self._opts.model)
 
-        self._prewarm_thread = threading.Thread(
-            target=_load, name="whisper-prewarm", daemon=True
-        )
+        self._prewarm_thread = threading.Thread(target=_load, name="whisper-prewarm", daemon=True)
         self._prewarm_thread.start()
 
     # -- recognition --------------------------------------------------------------

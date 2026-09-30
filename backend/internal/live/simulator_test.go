@@ -405,4 +405,3 @@ func TestSimulateCallCancelledMidCallIsClosedAsFailed(t *testing.T) {
 	evs := bus.byCall()[c.ID]
 	assert.Equal(t, domain.EventCallEnded, evs[len(evs)-1].Type)
 }
-

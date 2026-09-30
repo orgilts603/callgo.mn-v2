@@ -36,6 +36,14 @@ func TestResampleSineRoundTrip16k8k16k(t *testing.T) {
 	assert.Greater(t, snr, 30.0)
 }
 
+func TestResampleRoundTripHigherTone(t *testing.T) {
+	x := sineWave(16000, 2500, 16000, 16000)
+	up := Resample(Resample(x, 16000, 8000), 8000, 16000)
+	snr := snrDB(x, up, 300)
+	t.Logf("2.5 kHz round-trip SNR: %.1f dB", snr)
+	assert.Greater(t, snr, 30.0)
+}
+
 func TestResampleAllRatePairs(t *testing.T) {
 	const freq = 1000.0
 	for _, from := range testRates {
