@@ -441,7 +441,7 @@ class WhisperSTT(stt.STT):
         if o.max_tokens_per_second:
             window_s = min(audio.size / WHISPER_SAMPLE_RATE, 30.0)  # per 30 s Whisper window
             max_new_tokens = min(
-                _MAX_NEW_TOKENS_CAP, int(math.ceil(window_s * o.max_tokens_per_second)) + 16
+                _MAX_NEW_TOKENS_CAP, math.ceil(window_s * o.max_tokens_per_second) + 16
             )
         segments_iter, info = model.transcribe(
             audio,

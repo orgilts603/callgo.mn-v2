@@ -26,7 +26,7 @@ describe('Transcript', () => {
     render(<Transcript callId="c1" turns={turns} />, { wrapper: wrapper(makeQueryClient()) })
     expect(screen.queryByRole('dialog')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'колгоу' }))
-    const dialog = screen.getByRole('dialog')
+    const dialog = screen.getByRole('dialog', { name: 'Үг засах' })
     expect(within(dialog).getByText('Үг засах')).toBeInTheDocument()
     expect(within(dialog).getByTestId('wrong-word')).toHaveTextContent('колгоу')
     expect(within(dialog).getByLabelText('Зөв бичлэг')).toHaveValue('колгоу')
