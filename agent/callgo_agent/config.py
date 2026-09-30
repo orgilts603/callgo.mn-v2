@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     default_language: str = "mn"
     max_call_duration_sec: int = 600
     event_flush_interval_ms: int = 250
+    # "vad" (default) or "multilingual" (LiveKit turn-detector model; falls back
+    # to VAD for languages it does not cover, including Mongolian).
+    turn_detector: str = "vad"
+    log_level: str = "INFO"
 
     livekit_url: str = Field(default="ws://localhost:7880", alias="LIVEKIT_URL")
     livekit_api_key: str = Field(default="devkey", alias="LIVEKIT_API_KEY")

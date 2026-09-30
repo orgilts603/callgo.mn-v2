@@ -3,8 +3,8 @@
 Base URL: `http://localhost:8080`. All JSON. Timestamps are RFC-3339 UTC.
 Entity JSON shapes are exactly the `json` tags in `backend/internal/domain/domain.go`
 (camelCase). Lists return `{"items": [...], "total": N}`. Errors return
-`{"error": {"code": "not_found|invalid|unauthorized|forbidden|conflict|internal", "message": "..."}}`
-with matching HTTP status (404/400/401/403/409/500).
+`{"error": {"code": "not_found|invalid|unauthorized|forbidden|conflict|rate_limited|internal", "message": "..."}}`
+with matching HTTP status (404/400/401/403/409/429/500).
 
 ## Auth
 - `POST /api/auth/login` `{email, password}` → `{token, user, org}`.

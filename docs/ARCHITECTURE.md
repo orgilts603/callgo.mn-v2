@@ -54,7 +54,7 @@ and pushes live events to the **React** dashboard.
 
 ### Inbound
 1. Carrier → Asterisk (PJSIP endpoint) → dialplan forwards the DID to LiveKit SIP (`infra/asterisk`).
-2. livekit-sip matches an **inbound trunk** + **dispatch rule** (created by the backend when a `SIPNumber` is provisioned). Rule type: *individual* room per call, room name prefix `call-`, with an **agent dispatch** to agent name `callgo` and metadata `{"sipNumberId": "...", "direction": "inbound"}`.
+2. livekit-sip matches an **inbound trunk** + **dispatch rule** (created by the backend when a `SIPNumber` is provisioned). Rule type: *individual* room per call, room name prefix `call-` (inbound rooms become `call-in_<caller>_<random>`; outbound rooms are `call-<callId>`), with an **agent dispatch** to agent name `callgo` and metadata `{"sipNumberId": "...", "direction": "inbound"}`.
 3. livekit-server fires webhooks (`room_started`, `participant_joined`, `participant_left`, `room_finished`) → `POST /api/livekit/webhook` → backend creates/updates a `Call` row and publishes live events.
 4. The agent worker receives the job, calls `GET /internal/agent/bootstrap?room=…` to fetch the resolved `AgentProfile`, `LLMConfig` (decrypted), lexicon and contact; runs the session; streams transcript turns / state to `POST /internal/agent/events`.
 5. On hangup the agent posts `call.ended` with the summary/sentiment/intent it computed (post-call LLM analysis), the backend closes the call.

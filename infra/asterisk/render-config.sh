@@ -97,6 +97,12 @@ elif [[ -z "$CARRIER_USERNAME" ]]; then
   sed -i -e '/^\[carrier-auth\]$/,/^$/d' -e '/^outbound_auth=carrier-auth$/d' "$DST/pjsip_carrier.conf"
   log "carrier trunk without credentials (IP authentication)"
 fi
+if [[ "$carrier" == yes && "$CARRIER_FROM_USER" == callerid ]]; then
+  # Send the CallGo caller ID (our DID) as the From user instead of a fixed
+  # trunk username (some carriers take the CLI from From, not from PAI).
+  sed -i -e '/^from_user=/d' "$DST/pjsip_carrier.conf"
+  log "carrier From user = caller ID"
+fi
 if [[ "$testphone" == yes && ${#TEST_PHONE_PASSWORD} -lt 12 ]]; then
   die "TEST_PHONE_PASSWORD must be at least 12 characters"
 fi

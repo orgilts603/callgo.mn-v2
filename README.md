@@ -59,3 +59,47 @@ Execute systematically without waiting for micro-instructions:
 - **Progress reporting:** Provide brief one-line status updates before initiating major phases so I can follow along.
 
 Begin Phase 1 now: inspect the filesystem and environment, and report your discovery.
+
+---
+
+## Project status & quick start
+
+The mission above is implemented as a monorepo. Architecture, contracts and
+deployment live in `docs/`:
+
+| Doc | What it covers |
+|---|---|
+| `docs/ARCHITECTURE.md` | Asterisk → LiveKit SIP → LiveKit Agents → Go CRM → React; call flows; multi-LLM routing |
+| `docs/API.md` | Every REST / WebSocket / internal endpoint (frozen contract) |
+| `docs/EVENTS.md` | Live event envelope and payloads |
+| `docs/DEPLOY.md`, `docs/ASTERISK.md`, `docs/SIP_FLOW.md` | Production deployment, carrier trunk setup, SIP sequence diagrams |
+
+### Run locally (no SIP trunk needed)
+
+```bash
+# 1. PostgreSQL 16 with a callgo/callgo user (see backend/.env.example)
+# 2. Backend — mock telephony + fake-call simulator
+cd backend && CALLGO_SIMULATOR=true go run ./cmd/server          # :8080
+# 3. Frontend
+cd frontend && pnpm install && pnpm dev                           # :5173 → login admin@callgo.mn / admin1234
+# 4. Voice agent worker (needs a LiveKit server; see docs/DEPLOY.md)
+cd agent && uv venv && uv pip install -e ".[dev]" && python -m callgo_agent.main dev
+```
+
+### Tests
+
+```bash
+cd backend  && go test ./...                 # Go: ~350 tests incl. Postgres integration (CALLGO_TEST_DATABASE_URL)
+cd frontend && pnpm exec vitest run          # React: 77 tests
+cd agent    && .venv/bin/pytest              # Python: 540 tests
+```
+
+### Layout
+
+```
+backend/   Go 1.26 control plane  (internal/{crm,httpapi,auth,livekit,campaign,live,lexicon,csvimport,phone,audio,config,middleware,llmtest})
+agent/     Python LiveKit Agents worker (session, tools, llm_router, stt_local=faster-whisper, tts_local=piper, normalizer)
+frontend/  React 19 + Vite + Tailwind v4 dashboard (live desk, call drawer, campaigns, contacts, lexicon, settings)
+infra/     docker-compose, livekit-server, livekit-sip, redis, Asterisk PJSIP configs, lk CLI scripts
+docs/      contracts and runbooks
+```

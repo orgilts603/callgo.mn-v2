@@ -35,7 +35,9 @@ aors=carrier
 ; Answer the carrier's 401/407 challenge on outbound INVITEs.
 outbound_auth=carrier-auth
 ; From header of outbound calls. Many Mongolian carriers require the trunk
-; username (or the main DID) as From user and their own domain as From host.
+; username (or the main DID) as From user and their own domain as From host;
+; the real caller ID then travels in P-Asserted-Identity / Remote-Party-ID.
+; CARRIER_FROM_USER=callerid removes from_user so From carries the caller ID.
 from_user=${CARRIER_FROM_USER}
 from_domain=${CARRIER_FROM_DOMAIN}
 ; PSTN in Mongolia is G.711 A-law; u-law as fallback.
