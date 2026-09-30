@@ -31,7 +31,7 @@ troubleshooting), [SIP_FLOW.md](SIP_FLOW.md) (sequence diagrams),
 
 | Service | Image (pinned in `.env`) | Profile | Purpose |
 |---|---|---|---|
-| postgres | `postgres:16-alpine` | dev, full | CRM database (`callgo`, plus `callgo_test`) |
+| postgres | `pgvector/pgvector:pg16` | dev, full | CRM database with the `vector` extension for RAG (`callgo`, plus `callgo_test`) |
 | redis | `redis:7.4-alpine` | dev, full | LiveKit bus shared by livekit, livekit-sip, egress |
 | livekit | `livekit/livekit-server:v1.13` | dev, full | Rooms / SFU / SIP + agent-dispatch control plane |
 | livekit-sip | `livekit/sip:v1.17` | full | SIP ⇄ LiveKit bridge (talks only to Asterisk) |
@@ -344,3 +344,8 @@ Back up: the `callgo_postgres-data` volume (or dumps), `.env`, `agent/models/pip
 | One-way / no audio | `SIP_EXTERNAL_IP`, RTP ports 10000-10200/udp open, `DOCKER-USER` rules |
 | Live Desk not updating | WebSocket through the proxy: `/api/ws` must be upgraded (Caddy does it automatically) |
 | Webhooks not arriving | `make compose-logs SERVICE=livekit` shows webhook errors; `LIVEKIT_WEBHOOK_URL`, key pair equality |
+
+## Knowledge base (RAG) prerequisites
+
+- PostgreSQL must have the `vector` extension (`pgvector/pgvector:pg16` image, or `apt install postgresql-16-pgvector` on a bare host). Migration 000003 runs `CREATE EXTENSION IF NOT EXISTS vector` and needs a superuser or a role with `CREATE` on the database the first time.
+- Embeddings use the organisation's LLM config credentials: OpenAI (`text-embedding-3-small`), Google (`text-embedding-004`), Ollama (`nomic-embed-text`, local, no key) or any OpenAI-compatible `/embeddings` endpoint. Without a usable config the backend falls back to full-text search only (mode `text` in the UI) — set `CALLGO_EMBED_FAKE=true` in dev to exercise the hybrid path with a deterministic offline embedder.

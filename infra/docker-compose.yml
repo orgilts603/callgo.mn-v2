@@ -62,7 +62,7 @@ services:
   # PostgreSQL 16 — CRM database (өгөгдлийн сан)
   # ---------------------------------------------------------------------------
   postgres:
-    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg16}
     profiles: [dev, full]
     <<: [*restart, *logging]
     environment:
