@@ -25,7 +25,7 @@ export function AppShell() {
       <div className="flex min-w-0 flex-1 flex-col">
         <Topbar searchRef={searchRef} />
         <main id="main" tabIndex={-1} className="min-h-0 flex-1 focus:outline-none">
-          <ErrorBoundary key={pathname}>
+          <ErrorBoundary resetKey={pathname}>
             <PageContainer fluid={fullWidth}>
               <Outlet />
             </PageContainer>

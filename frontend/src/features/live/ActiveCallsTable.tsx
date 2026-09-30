@@ -35,7 +35,7 @@ function ActionsCell({ row }: { row: CallRow }) {
       <Button size="icon" variant="ghost" className="h-7 w-7" aria-label="Дэлгэрэнгүй" title="Дэлгэрэнгүй" onClick={() => onOpen(row.id)}>
         <PanelRightOpen className="h-4 w-4" />
       </Button>
-      <Button size="icon" variant="ghost" className="h-7 w-7 text-red-300 hover:text-red-200" aria-label="Таслах" title="Дуудлага таслах"
+      <Button size="icon" variant="ghost" className="h-7 w-7 text-[var(--danger)] hover:text-[var(--danger-fg)]" aria-label="Таслах" title="Дуудлага таслах"
         disabled={!canHangup} onClick={() => onHangup(row)}>
         <PhoneOff className="h-4 w-4" />
       </Button>
@@ -115,7 +115,7 @@ interface RowViewProps { row: LiveRow; data: CallRow; selected: boolean; onOpen:
 const RowView = memo(function RowView({ row, data, selected, onOpen }: RowViewProps) {
   return (
     <TR onClick={() => onOpen(data.id)} data-testid="live-row" data-call-id={data.id}
-      className={cn('cursor-pointer', selected && 'bg-[var(--accent)]/10 hover:bg-[var(--accent)]/15')}>
+      className={cn('cursor-pointer', selected && 'bg-[var(--accent-soft)] hover:bg-[var(--accent-soft)]')}>
       {row.getAllCells().map((cell) => (
         <TD key={cell.id} className={cell.column.id === 'actions' ? 'w-20' : undefined}><FlexRender cell={cell} /></TD>
       ))}

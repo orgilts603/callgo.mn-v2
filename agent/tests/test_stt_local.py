@@ -27,6 +27,7 @@ class FakeSegment:
     end: float
     text: str
     avg_logprob: float
+    compression_ratio: float = 1.2
 
 
 @dataclass
@@ -186,6 +187,8 @@ async def test_recognize_returns_final_transcript() -> None:
     assert kwargs["vad_filter"] is False
     assert kwargs["condition_on_previous_text"] is False
     assert kwargs["initial_prompt"] == "CallGo"
+    assert kwargs["temperature"] == 0.0
+    assert kwargs["max_new_tokens"] == 2 * 20 + 16  # 2 s of audio at 20 tok/s + 16
     # decoding ran off the event loop thread
     assert model.threads[0] != threading.main_thread().name
 
@@ -241,6 +244,26 @@ async def test_empty_audio_and_no_segments() -> None:
     ev = await whisper.recognize(_frame(np.zeros(1600, dtype=np.int16), 16000))
     assert ev.alternatives[0].text == ""
     assert ev.alternatives[0].confidence == 0.0
+
+
+async def test_repetition_segments_dropped_and_token_cap() -> None:
+    model = FakeWhisperModel(
+        [
+            FakeSegment(0, 1, " Тийм", -0.1),
+            FakeSegment(1, 30, " A-A-A-A-A-A-A-A-A-A", -0.2, compression_ratio=9.0),
+        ]
+    )
+    whisper = WhisperSTT(model="tiny", model_factory=FactorySpy(model))
+    ev = await whisper.recognize(_frame(_tone(40.0, 16000), 16000))
+    assert ev.alternatives[0].text == "Тийм"
+    assert ev.alternatives[0].end_time == 1
+    assert model.calls[0][1]["max_new_tokens"] == 220  # capped (30 s window * 20 + 16 > 220)
+
+    unbounded = WhisperSTT(
+        model="tiny", max_tokens_per_second=None, model_factory=FactorySpy(model)
+    )
+    await unbounded.recognize(_frame(_tone(1.0, 16000), 16000))
+    assert model.calls[1][1]["max_new_tokens"] is None
 
 
 async def test_keyterms_become_hotwords() -> None:

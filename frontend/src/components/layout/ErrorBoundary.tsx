@@ -32,10 +32,16 @@ export function ErrorCard({ title, message, onRetry }: { title?: string; message
 
 interface State { error: Error | null }
 
-/** Catches render errors below it. Give it a `key` (e.g. pathname) to reset on navigation. */
-export class ErrorBoundary extends Component<{ children: ReactNode; fallback?: ReactNode }, State> {
+/**
+ * Catches render errors below it. When `resetKey` changes (e.g. the pathname) a
+ * shown error is cleared without remounting healthy children.
+ */
+export class ErrorBoundary extends Component<{ children: ReactNode; fallback?: ReactNode; resetKey?: unknown }, State> {
   state: State = { error: null }
   static getDerivedStateFromError(error: Error): State { return { error } }
+  componentDidUpdate(prev: { resetKey?: unknown }) {
+    if (this.state.error && prev.resetKey !== this.props.resetKey) this.setState({ error: null })
+  }
   componentDidCatch(error: Error, info: ErrorInfo) { console.error('[ErrorBoundary]', error, info.componentStack) }
   render() {
     if (this.state.error) return this.props.fallback ?? <ErrorCard message={this.state.error.message} onRetry={() => window.location.reload()} />

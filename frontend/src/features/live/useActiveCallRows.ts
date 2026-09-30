@@ -6,6 +6,7 @@ import { activeCallsKey, callsApi, contactNameKey, isLiveStatus, useCampaignName
 import type { CallLiveMeta, CallRow } from './types'
 
 const NO_CALLS: Call[] = []
+const selectContactName = (r: { contact: { name: string } }) => r.contact.name
 
 function newer(a: Call, b: Call): Call {
   return (Date.parse(b.updatedAt) || 0) >= (Date.parse(a.updatedAt) || 0) ? b : a
@@ -58,7 +59,7 @@ export function useActiveCallRows(meta: Record<string, CallLiveMeta>, endedIds: 
       queryKey: contactNameKey(id),
       queryFn: () => callsApi.contact(id),
       staleTime: 5 * 60_000,
-      select: (r: { contact: { name: string } }) => r.contact.name,
+      select: selectContactName,
     })),
     combine,
   })

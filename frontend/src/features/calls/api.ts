@@ -33,6 +33,7 @@ export function useCallDetail(id: string | null | undefined) {
 }
 
 const EMPTY_NAMES: ReadonlyMap<string, string> = new Map()
+const toNameMap = (r: { items: Campaign[] }): ReadonlyMap<string, string> => new Map(r.items.map((c) => [c.id, c.name] as const))
 
 /** Campaign id → name lookup (one request for all campaigns, cached for a minute). */
 export function useCampaignNames(enabled = true): ReadonlyMap<string, string> {
@@ -41,7 +42,7 @@ export function useCampaignNames(enabled = true): ReadonlyMap<string, string> {
     queryFn: callsApi.campaigns,
     enabled,
     staleTime: 60_000,
-    select: (r) => new Map(r.items.map((c) => [c.id, c.name] as const)) as ReadonlyMap<string, string>,
+    select: toNameMap,
   })
   return q.data ?? EMPTY_NAMES
 }

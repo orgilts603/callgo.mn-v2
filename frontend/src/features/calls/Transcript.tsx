@@ -12,8 +12,8 @@ export const LOW_CONFIDENCE = 0.6
 
 const speakerMeta: Record<Speaker, { label: string; icon: typeof User; align: 'left' | 'right'; bubble: string }> = {
   customer: { label: 'Харилцагч', icon: User, align: 'left', bubble: 'bg-[var(--surface-2)] border-[var(--border)]' },
-  agent: { label: 'AI агент', icon: Bot, align: 'right', bubble: 'bg-[var(--accent)]/12 border-[var(--accent)]/30' },
-  human: { label: 'Оператор', icon: Headset, align: 'right', bubble: 'bg-emerald-500/10 border-emerald-500/30' },
+  agent: { label: 'AI агент', icon: Bot, align: 'right', bubble: 'bg-[var(--accent-soft)] border-[var(--accent-border)]' },
+  human: { label: 'Оператор', icon: Headset, align: 'right', bubble: 'bg-[var(--success-soft)] border-[var(--success-border)]' },
 }
 
 export interface TranscriptProps {
@@ -58,7 +58,7 @@ const TurnBubble = memo(function TurnBubble({ turn, active, onSeek, onWord, onEd
             {fmtDuration(turn.startMs / 1000)}
           </button>
           {low && (
-            <span className="inline-flex items-center gap-0.5 text-amber-300" title={`Итгэлцүүр: ${Math.round(turn.confidence * 100)}%`}>
+            <span className="inline-flex items-center gap-0.5 text-[var(--warning-fg)]" title={`Итгэлцүүр: ${Math.round(turn.confidence * 100)}%`}>
               <AlertTriangle className="h-3 w-3" />{Math.round(turn.confidence * 100)}%
             </span>
           )}
@@ -74,7 +74,7 @@ const TurnBubble = memo(function TurnBubble({ turn, active, onSeek, onWord, onEd
             'rounded-2xl border px-3.5 py-2 text-left text-sm leading-relaxed text-[var(--fg)] transition-shadow',
             meta.bubble,
             meta.align === 'right' ? 'rounded-tr-sm' : 'rounded-tl-sm',
-            low && 'border-amber-500/50 bg-amber-500/10',
+            low && 'border-[var(--warning-border)] bg-[var(--warning-soft)]',
             active && 'ring-2 ring-[var(--accent)]/70',
             !clickableWords && onSeek && 'cursor-pointer',
           )}
@@ -82,7 +82,7 @@ const TurnBubble = memo(function TurnBubble({ turn, active, onSeek, onWord, onEd
           {clickableWords
             ? tokenize(turn.text).map((tok, i) => tok.wordIndex < 0 ? tok.text : (
               <button key={i} type="button" onClick={() => onWord(turn, tok.wordIndex)} title="Үгийг засах"
-                className="-mx-px cursor-pointer rounded px-px text-left underline-offset-4 hover:bg-[var(--accent)]/20 hover:underline decoration-dotted focus-visible:bg-[var(--accent)]/20 focus-visible:outline-none">
+                className="-mx-px cursor-pointer rounded px-px text-left underline-offset-4 hover:bg-[var(--accent-soft)] hover:underline decoration-dotted focus-visible:bg-[var(--accent-soft)] focus-visible:outline-none">
                 {tok.text}
               </button>
             ))
@@ -166,7 +166,7 @@ export function Transcript({ callId, turns, partials = NO_PARTIALS, activeMs, on
       </div>
       {!atBottom && !empty && (
         <button type="button" onClick={scrollToBottom}
-          className="absolute bottom-3 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-3)] px-3 py-1 text-xs text-[var(--fg)] shadow-lg hover:bg-[var(--surface-2)]">
+          className="absolute bottom-3 left-1/2 inline-flex -translate-x-1/2 items-center gap-1 rounded-full border border-[var(--border)] bg-[var(--surface-overlay)] px-3 py-1 text-xs text-[var(--fg)] shadow-[var(--shadow-md)] hover:bg-[var(--surface-2)]">
           <ArrowDown className="h-3 w-3" /> Доош гүйлгэх
         </button>
       )}

@@ -48,8 +48,15 @@ logger = logging.getLogger("callgo.stt_local")
 WHISPER_SAMPLE_RATE = 16000
 """faster-whisper expects mono float32 PCM at 16 kHz in [-1, 1]."""
 
-DEFAULT_TEMPERATURES: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
-"""faster-whisper's default temperature fallback schedule (guards against repetition loops)."""
+FALLBACK_TEMPERATURES: tuple[float, ...] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+"""faster-whisper's default fallback schedule. More robust, but on noise every step can
+decode up to the token limit, multiplying latency by up to 6x, so it is opt-in here."""
+
+MAX_COMPRESSION_RATIO = 2.4
+"""Segments above this gzip ratio are repetition loops ("A-A-A-A…") and are dropped."""
+
+_MAX_NEW_TOKENS_CAP = 220
+"""Whisper's context is 448 tokens; the prompt (initial_prompt/hotwords) may take ~225."""
 
 _AUTO_LANGUAGES = frozenset({"", "auto", "detect"})
 
@@ -203,6 +210,11 @@ def _whisper_language(language: str | None) -> str | None:
     return lang.split("-", 1)[0]
 
 
+def _is_repetition(seg: _Segment) -> bool:
+    ratio = getattr(seg, "compression_ratio", None)
+    return isinstance(ratio, int | float) and ratio > MAX_COMPRESSION_RATIO
+
+
 def _segment_confidence(seg: _Segment) -> float:
     try:
         return float(min(1.0, max(0.0, math.exp(float(seg.avg_logprob)))))
@@ -227,6 +239,7 @@ class WhisperOptions:
     num_workers: int
     local_files_only: bool
     temperature: float | tuple[float, ...]
+    max_tokens_per_second: float | None
 
 
 class WhisperSTT(stt.STT):
@@ -246,7 +259,8 @@ class WhisperSTT(stt.STT):
         cpu_threads: int = 0,
         num_workers: int = 1,
         local_files_only: bool = False,
-        temperature: float | tuple[float, ...] = DEFAULT_TEMPERATURES,
+        temperature: float | tuple[float, ...] = 0.0,
+        max_tokens_per_second: float | None = 20.0,
         model_factory: ModelFactory | None = None,
     ) -> None:
         """
@@ -264,6 +278,11 @@ class WhisperSTT(stt.STT):
             hotwords: optional space-separated hot words (faster-whisper ``hotwords``).
             download_root: model cache dir (default: Hugging Face cache, ``HF_HOME``).
             local_files_only: never hit the network when resolving the model.
+            temperature: decoding temperature; pass ``FALLBACK_TEMPERATURES`` for Whisper's
+                fallback schedule (more robust, slower worst case).
+            max_tokens_per_second: bounds decoding to ``20 tok/s`` of audio (+16) so noise
+                cannot make Whisper generate 448 tokens; Mongolian runs ~1.5 chars/token,
+                i.e. ~10 tok/s of fast speech. ``None`` disables the bound.
             model_factory: injectable ``WhisperModel`` constructor (tests).
         """
         super().__init__(
@@ -287,6 +306,7 @@ class WhisperSTT(stt.STT):
             num_workers=max(1, num_workers),
             local_files_only=local_files_only,
             temperature=temperature,
+            max_tokens_per_second=max_tokens_per_second,
         )
         self._model_factory: ModelFactory = model_factory or _default_model_factory
         self._session_keyterms: list[str] = []
@@ -417,6 +437,12 @@ class WhisperSTT(stt.STT):
             )
 
         o = self._opts
+        max_new_tokens: int | None = None
+        if o.max_tokens_per_second:
+            window_s = min(audio.size / WHISPER_SAMPLE_RATE, 30.0)  # per 30 s Whisper window
+            max_new_tokens = min(
+                _MAX_NEW_TOKENS_CAP, int(math.ceil(window_s * o.max_tokens_per_second)) + 16
+            )
         segments_iter, info = model.transcribe(
             audio,
             language=requested_lang,
@@ -427,9 +453,10 @@ class WhisperSTT(stt.STT):
             hotwords=self._effective_hotwords(),
             temperature=o.temperature,
             without_timestamps=False,
+            max_new_tokens=max_new_tokens,
         )
         # the generator performs the actual decoding: consume it here, in the thread
-        segments: Sequence[_Segment] = list(segments_iter)
+        segments: Sequence[_Segment] = [s for s in segments_iter if not _is_repetition(s)]
 
         texts = [s.text.strip() for s in segments if s.text and s.text.strip()]
         text = " ".join(texts)

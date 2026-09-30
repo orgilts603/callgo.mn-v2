@@ -1,14 +1,14 @@
 import { useState, type FormEvent } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Button, Dialog, Field, Input } from '@/components/ui'
+import { Button, ConfirmDialog, Dialog, Field, Input } from '@/components/ui'
 import { fmtPhone } from '@/lib/utils'
 import type { Call } from '@/lib/types'
 import { activeCallsKey, callKey, callsApi } from './api'
 
 export interface HangupDialogProps { call: Pick<Call, 'id' | 'fromNumber' | 'toNumber'> | null; onClose: () => void; onDone?: () => void }
 
-/** Confirmation dialog for POST /api/calls/{id}/hangup. Renders nothing when `call` is null. */
+/** Confirmation for POST /api/calls/{id}/hangup (shared ConfirmDialog). Renders nothing when `call` is null. */
 export function HangupDialog({ call, onClose, onDone }: HangupDialogProps) {
   const qc = useQueryClient()
   const mutation = useMutation({
@@ -17,23 +17,16 @@ export function HangupDialog({ call, onClose, onDone }: HangupDialogProps) {
       toast.success('Дуудлага тасаллаа')
       void qc.invalidateQueries({ queryKey: callKey(id) })
       void qc.invalidateQueries({ queryKey: activeCallsKey })
-      onClose()
       onDone?.()
     },
     onError: (err: Error) => { toast.error(err.message || 'Дуудлага тасалж чадсангүй') },
   })
   if (!call) return null
   return (
-    <Dialog open onClose={onClose} title="Дуудлага таслах уу?"
-      description={`${fmtPhone(call.fromNumber)} → ${fmtPhone(call.toNumber)}`}
-      footer={
-        <>
-          <Button variant="ghost" onClick={onClose}>Болих</Button>
-          <Button variant="danger" loading={mutation.isPending} onClick={() => mutation.mutate(call.id)}>Таслах</Button>
-        </>
-      }>
+    <ConfirmDialog open onClose={onClose} onConfirm={() => mutation.mutateAsync(call.id)} loading={mutation.isPending}
+      title="Дуудлага таслах уу?" description={`${fmtPhone(call.fromNumber)} → ${fmtPhone(call.toNumber)}`} confirmLabel="Таслах">
       <p className="text-sm text-[var(--fg-muted)]">Яриа шууд тасарч, харилцагчтай холболт салгагдана.</p>
-    </Dialog>
+    </ConfirmDialog>
   )
 }
 

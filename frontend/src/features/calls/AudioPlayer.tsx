@@ -112,7 +112,7 @@ export function AudioPlayer({ url, live, onTime, ref, className }: AudioPlayerPr
   }
 
   return (
-    <div className={cn('rounded-lg border border-[var(--border)] bg-[var(--surface-0)] p-3', className)}>
+    <div className={cn('rounded-lg border border-[var(--border)] bg-[var(--surface-inset)] p-3', className)}>
       <div className="flex items-center gap-3">
         <Button size="icon" variant="primary" className="h-9 w-9 shrink-0 rounded-full" disabled={!ready}
           onClick={() => void wsRef.current?.playPause()} aria-label={playing ? 'Түр зогсоох' : 'Тоглуулах'}>
@@ -122,7 +122,7 @@ export function AudioPlayer({ url, live, onTime, ref, className }: AudioPlayerPr
           <div ref={containerRef} className={cn('w-full', !ready && !error && 'opacity-0')} data-testid="waveform" />
           {!ready && !error && <Skeleton className="absolute inset-0 h-14" />}
           {error && (
-            <div className="absolute inset-0 flex items-center gap-2 text-xs text-red-300">
+            <div className="absolute inset-0 flex items-center gap-2 text-xs text-[var(--danger-fg)]">
               <AlertCircle className="h-4 w-4" />{error}
             </div>
           )}
@@ -134,7 +134,7 @@ export function AudioPlayer({ url, live, onTime, ref, className }: AudioPlayerPr
           {PLAYBACK_RATES.map((r) => (
             <button key={r} type="button" onClick={() => changeRate(r)} aria-pressed={rate === r}
               className={cn('rounded px-1.5 py-0.5 tabular-nums transition-colors',
-                rate === r ? 'bg-[var(--accent)]/20 text-[var(--accent-fg)]' : 'hover:bg-[var(--surface-2)] hover:text-[var(--fg)]')}>
+                rate === r ? 'bg-[var(--accent-soft)] text-[var(--accent-fg)]' : 'hover:bg-[var(--surface-2)] hover:text-[var(--fg)]')}>
               {r}x
             </button>
           ))}

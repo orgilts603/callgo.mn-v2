@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from livekit import api as lk_api
-from livekit.agents.llm import FunctionTool, StopResponse, ToolError, function_tool
+from livekit.agents.llm import FunctionTool, StopResponse, ToolError, ToolFlag, function_tool
 from livekit.agents.voice import RunContext
 
 from .events import utcnow
@@ -135,7 +135,7 @@ def contact_summary(bootstrap: Bootstrap) -> str:
 def _build_end_call(state: CallState) -> FunctionTool[Any, Any]:
     language = language_name(state.bootstrap.profile.language)
 
-    @function_tool(name=TOOL_END_CALL)
+    @function_tool(name=TOOL_END_CALL, flags=ToolFlag.IGNORE_ON_ENTER)
     async def end_call(ctx: RunContext) -> str:
         """End the phone call and hang up.
 
@@ -162,7 +162,7 @@ def _build_end_call(state: CallState) -> FunctionTool[Any, Any]:
 def _build_transfer_call(state: CallState, control: CallControl) -> FunctionTool[Any, Any]:
     number = state.bootstrap.profile.transfer_number
 
-    @function_tool(name=TOOL_TRANSFER_CALL)
+    @function_tool(name=TOOL_TRANSFER_CALL, flags=ToolFlag.IGNORE_ON_ENTER)
     async def transfer_call(ctx: RunContext, reason: str = "") -> None:
         """Transfer the caller to a human operator.
 
@@ -176,15 +176,18 @@ def _build_transfer_call(state: CallState, control: CallControl) -> FunctionTool
             raise ToolError("Transfer is not available. Offer to help or schedule a callback.")
         await ctx.wait_for_playout()
         log.info("transferring call to %s (reason: %s)", number, reason or "-")
+        # Mark before the REFER: the SIP participant may leave the room before it returns.
+        claimed = state.set_end_reason("transferred")
         try:
             await control.transfer(number)
         except Exception as exc:
+            if claimed and state.end_reason == "transferred":
+                state.end_reason = None
             log.warning("SIP transfer to %s failed: %s", number, exc)
             raise ToolError(
                 "The transfer failed. Apologise and offer to schedule a callback instead."
             ) from exc
         state.transferred_to = number
-        state.set_end_reason("transferred")
         ctx.session.shutdown(drain=False)
         raise StopResponse()
 

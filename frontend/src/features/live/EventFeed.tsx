@@ -18,7 +18,7 @@ const ICONS: Partial<Record<EventType, typeof Activity>> = {
   'lexicon.updated': BookA, system: Wifi,
 }
 const TONES: Partial<Record<EventType, string>> = {
-  'call.started': 'text-sky-300', 'call.ringing': 'text-amber-300', 'call.answered': 'text-emerald-300', 'call.ended': 'text-red-300',
+  'call.started': 'text-[var(--info)]', 'call.ringing': 'text-[var(--warning)]', 'call.answered': 'text-[var(--success)]', 'call.ended': 'text-[var(--danger)]',
   'lexicon.updated': 'text-[var(--accent-fg)]',
 }
 const SPEAKER: Record<string, string> = { customer: 'Харилцагч', agent: 'Агент', human: 'Оператор' }
@@ -107,7 +107,7 @@ export function EventFeed({ events, collapsed, onToggle, onOpenCall }: EventFeed
       </div>
       {events.length === 0
         ? <p className="px-3 py-6 text-center text-xs text-[var(--fg-subtle)]">Үйл явдал хүлээж байна…</p>
-        : <ul className="max-h-[calc(100vh-18rem)] divide-y divide-[var(--border)]/60 overflow-y-auto">{events.map((ev, i) => <FeedItem key={ev.id || `i${i}`} ev={ev} onOpenCall={onOpenCall} />)}</ul>}
+        : <ul className="max-h-[calc(100vh-18rem)] divide-y divide-[var(--border-subtle)] overflow-y-auto">{events.map((ev, i) => <FeedItem key={ev.id || `i${i}`} ev={ev} onOpenCall={onOpenCall} />)}</ul>}
     </Card>
   )
 }

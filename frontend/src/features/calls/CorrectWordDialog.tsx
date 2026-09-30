@@ -52,11 +52,11 @@ export function CorrectWordDialog({ open, onClose, callId, turn, wordIndex }: Co
       }
     >
       <form className="space-y-4" onSubmit={submit}>
-        <div className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-0)] px-3 py-2.5">
+        <div className="flex items-center gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface-inset)] px-3 py-2.5">
           <span className="text-xs text-[var(--fg-muted)]">Буруу</span>
-          <span data-testid="wrong-word" className="rounded bg-red-500/10 px-2 py-0.5 font-medium text-red-300 line-through decoration-red-400/60">{wrong}</span>
+          <span data-testid="wrong-word" className="rounded bg-[var(--danger-soft)] px-2 py-0.5 font-medium text-[var(--danger-fg)] line-through">{wrong}</span>
           <ArrowRight className="h-4 w-4 text-[var(--fg-subtle)]" />
-          <span className="rounded bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-300">{trimmed || '…'}</span>
+          <span className="rounded bg-[var(--success-soft)] px-2 py-0.5 font-medium text-[var(--success-fg)]">{trimmed || '…'}</span>
         </div>
         <Field label="Зөв бичлэг">
           <Input autoFocus value={correct} onChange={(e) => setCorrect(e.target.value)} placeholder="Зөв үг" aria-label="Зөв бичлэг" />

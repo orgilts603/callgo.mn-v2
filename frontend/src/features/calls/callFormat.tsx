@@ -21,7 +21,7 @@ export function DirectionIcon({ direction, className }: { direction: CallDirecti
   const Icon = direction === 'inbound' ? PhoneIncoming : PhoneOutgoing
   return (
     <Icon aria-label={DIRECTION_LABEL[direction]}
-      className={cn('h-4 w-4', direction === 'inbound' ? 'text-sky-300' : 'text-violet-300', className)} />
+      className={cn('h-4 w-4', direction === 'inbound' ? 'text-[var(--info-fg)]' : 'text-[var(--accent-2)]', className)} />
   )
 }
 
