@@ -1020,7 +1020,9 @@ async def run_call(
         if chain is None:
             raise RuntimeError("bootstrap returned no LLM configuration")
         model = f.build_llm(chain[0], chain[1])
+        finalizer.model = model  # closed by the finalizer even if STT/TTS fail below
         llm_label = f.describe_llm(chain[0])
+        finalizer.llm_label = recorder.llm_label = llm_label
         stt_engine = f.build_stt(boot.profile)
         tts_engine = f.build_tts(boot.profile)
     except Exception:
@@ -1029,10 +1031,6 @@ async def run_call(
         await finalizer.finalize()
         ctx.shutdown("pipeline build failed")
         return
-
-    finalizer.model = model
-    finalizer.llm_label = llm_label
-    recorder.llm_label = llm_label
 
     vad_model = ctx.proc.userdata.get("vad") or f.load_vad()
     session: AgentSession[CallState] = AgentSession(
@@ -1067,24 +1065,33 @@ async def run_call(
         on_stt_final=recorder.on_stt_final,
     )
     recorder.mark_answered()
-    await session.start(
-        agent=agent,
-        room=ctx.room,
-        room_options=room_io.RoomOptions(
-            participant_identity=participant.identity,
-            participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_SIP],
-            close_on_disconnect=True,
-        ),
+    emitter.call_answered(
+        boot.call.model_copy(
+            update={
+                "status": CallStatus.ACTIVE,
+                "answered_at": utcnow(),
+                "room_name": boot.call.room_name or room_name,
+                "llm_model_used": llm_label,
+            }
+        )
     )
-    answered_call = boot.call.model_copy(
-        update={
-            "status": CallStatus.ACTIVE,
-            "answered_at": utcnow(),
-            "room_name": boot.call.room_name or room_name,
-            "llm_model_used": llm_label,
-        }
-    )
-    emitter.call_answered(answered_call)
+    try:
+        await session.start(
+            agent=agent,
+            room=ctx.room,
+            room_options=room_io.RoomOptions(
+                participant_identity=participant.identity,
+                participant_kinds=[rtc.ParticipantKind.PARTICIPANT_KIND_SIP],
+                close_on_disconnect=True,
+            ),
+        )
+    except Exception:
+        log.exception("AgentSession failed to start for call %s", boot.call.id)
+        ctx.room.off("participant_disconnected", _on_participant_left)
+        state.set_end_reason("failed")
+        await finalizer.finalize(CloseReason.ERROR)
+        ctx.shutdown("session start failed")
+        return
 
     max_sec = boot.profile.max_duration_sec or settings.max_call_duration_sec
     timer = asyncio.create_task(

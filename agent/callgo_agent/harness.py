@@ -262,10 +262,13 @@ def _normalize(fn_name: str, text: str, lexicon: list[LexiconEntry] | None) -> s
         params = inspect.signature(fn).parameters
     except (TypeError, ValueError):
         params = {}  # type: ignore[assignment]
-    if lexicon is not None and "lexicon" in params:
-        out = fn(text, lexicon=lexicon)
+    if "lexicon" in params:
+        out = fn(text, lexicon or [])
     else:
         out = fn(text)
+    # normalize_stt returns (text, hits); normalize_for_tts returns text.
+    if isinstance(out, tuple):
+        out = out[0]
     return out if isinstance(out, str) else getattr(out, "text", str(out))
 
 

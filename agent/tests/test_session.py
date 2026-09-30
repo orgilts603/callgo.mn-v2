@@ -990,3 +990,52 @@ async def test_run_call_happy_path(
     assert ctx.api.room.deleted == ["call-1"]
     assert ctx.shutdown_reasons == ["hangup_customer"]
     assert model.closed and client.closed
+
+
+async def test_run_call_session_start_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class BrokenSession(FakeAgentSession):
+        async def start(self, agent: Any, *, room: Any, room_options: Any) -> None:
+            raise RuntimeError("rtc failure")
+
+    monkeypatch.setattr(sess, "AgentSession", BrokenSession)
+    ctx = FakeJobContext()
+    client = FakeClient(boot=make_bootstrap(llm_cfg=make_llm_config()))
+    model = FakeLLM([])
+    await run_call(ctx, client, factories=make_factories(model))  # type: ignore[arg-type]
+    assert [e.type for e in client.events] == ["call.answered", "call.ended"]
+    assert client.events[-1].payload["endReason"] == "failed"
+    assert ctx.shutdown_reasons == ["session start failed"]
+    assert ctx.room.handlers["participant_disconnected"] == []
+    assert model.closed
+
+
+def test_worker_server_registration() -> None:
+    import pickle
+
+    from callgo_agent import worker
+    from callgo_agent.config import settings
+
+    server = worker.build_server(http=False)
+    assert server._agent_name == settings.agent_name
+    assert server.setup_fnc is worker.prewarm
+    assert server._entrypoint_fnc is worker.entrypoint
+    pickle.dumps(worker.entrypoint)  # job processes receive it by reference
+    pickle.dumps(worker.prewarm)
+
+
+def test_prewarm_loads_telephony_vad(monkeypatch: pytest.MonkeyPatch) -> None:
+    from callgo_agent import worker
+
+    calls: list[dict[str, Any]] = []
+
+    class FakeVAD:
+        @staticmethod
+        def load(**kw: Any) -> str:
+            calls.append(kw)
+            return "vad"
+
+    monkeypatch.setattr(worker, "silero", types.SimpleNamespace(VAD=FakeVAD))
+    proc = types.SimpleNamespace(userdata={})
+    worker.prewarm(proc)  # type: ignore[arg-type]
+    assert proc.userdata == {"vad": "vad"}
+    assert calls and calls[0]["min_silence_duration"] < 0.55
