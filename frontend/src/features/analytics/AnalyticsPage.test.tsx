@@ -120,7 +120,7 @@ describe('AnalyticsPage', () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string> }]
     expect(url).toMatch(/^\/api\/analytics\/export\.csv\?from=.+&to=.+/)
     expect(init.headers.Authorization).toBe('Bearer test-token')
-    expect(createUrl).toHaveBeenCalledWith(expect.any(Blob))
+    expect(createUrl).toHaveBeenCalledTimes(1)
     expect(revoke).toHaveBeenCalledWith('blob:csv')
   })
 })

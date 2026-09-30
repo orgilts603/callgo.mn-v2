@@ -155,6 +155,7 @@ func TestUpgradeVoidsUnpaidInvoiceAndBillsOverage(t *testing.T) {
 	f.paidSub(f.org.ID, billing.PlanStarter)
 	f.clock.Advance(10 * day)
 	f.callMinutes(f.org.ID, 1010) // 10 minutes over the 1000 included
+	f.clock.Advance(time.Minute)
 
 	res, err := f.svc.ChangePlan(f.ctx, f.org.ID, billing.PlanGrowth)
 	require.NoError(t, err)
@@ -165,15 +166,29 @@ func TestUpgradeVoidsUnpaidInvoiceAndBillsOverage(t *testing.T) {
 	assert.Equal(t, float64(10), res.Invoice.Lines[1].Quantity)
 	assert.Equal(t, int64(893_500+89_350), res.Invoice.TotalMNT)
 
-	// Upgrading again before paying voids the growth invoice (same period)
-	// and carries its overage line over. Growth → starter is a downgrade, so
-	// go through cancel + resubscribe to growth instead: switch plans twice.
+	// A cancel followed by choosing the current plan again undoes the cancel.
 	_, err = f.svc.Cancel(f.ctx, f.org.ID)
 	require.NoError(t, err)
 	res2, err := f.svc.ChangePlan(f.ctx, f.org.ID, billing.PlanGrowth)
-	require.NoError(t, err, "choosing the current plan undoes the cancel")
+	require.NoError(t, err)
 	assert.Nil(t, res2.Subscription.CanceledAt)
 	assert.Nil(t, res2.Invoice)
+}
+
+func TestUpgradeBeforePayingVoidsSupersededInvoice(t *testing.T) {
+	f := newFixture(t)
+	first, err := f.svc.ChangePlan(f.ctx, f.org.ID, billing.PlanStarter)
+	require.NoError(t, err)
+	f.clock.Advance(time.Hour)
+	second, err := f.svc.ChangePlan(f.ctx, f.org.ID, billing.PlanGrowth)
+	require.NoError(t, err)
+	assert.Equal(t, domain.SubActive, second.Subscription.Status)
+
+	old, _, err := f.svc.Invoice(f.ctx, f.org.ID, first.Invoice.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.InvoiceVoid, old.Status)
+	require.Len(t, second.Invoice.Lines, 1)
+	assert.Equal(t, int64(979_000), second.Invoice.TotalMNT)
 }
 
 func TestDowngradeAppliesAtPeriodEnd(t *testing.T) {

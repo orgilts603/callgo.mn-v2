@@ -5,8 +5,10 @@ import sys
 import types
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable
+from datetime import datetime
 from typing import Any, ClassVar, Self
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import pytest
 from livekit import rtc
@@ -21,6 +23,7 @@ from livekit.agents import (
     llm,
     stt,
 )
+from livekit.agents.metrics import LLMMetrics, STTMetrics
 
 from callgo_agent import session as sess
 from callgo_agent.events import EventEmitter
@@ -75,6 +78,7 @@ from callgo_agent.session import (
     wait_for_answer,
 )
 from callgo_agent.tools import CallbackRequest, CallState
+from callgo_agent.usage import CostRates, UsageTracker
 
 ORG = UUID("11111111-1111-1111-1111-111111111111")
 CALL = UUID("22222222-2222-2222-2222-222222222222")
@@ -697,6 +701,41 @@ class FakeLLM:
         self.closed = True
 
 
+class MeteredLLM(FakeLLM):
+    """FakeLLM that emits ``metrics_collected`` (LLMMetrics) for each completion."""
+
+    def __init__(self, parts: list[str]) -> None:
+        super().__init__(parts)
+        self.handlers: list[Callable[[Any], None]] = []
+
+    def on(self, name: str, cb: Callable[[Any], None]) -> None:
+        assert name == "metrics_collected"
+        self.handlers.append(cb)
+
+    def off(self, name: str, cb: Callable[[Any], None]) -> None:
+        self.handlers.remove(cb)
+
+    def chat(self, *, chat_ctx: llm.ChatContext, **kw: Any) -> FakeStream:
+        stream = super().chat(chat_ctx=chat_ctx, **kw)
+        metrics = LLMMetrics(
+            label="fake",
+            request_id=f"req-{len(self.contexts)}",
+            timestamp=0,
+            duration=0.1,
+            ttft=0.05,
+            cancelled=False,
+            completion_tokens=20,
+            prompt_tokens=100,
+            prompt_cached_tokens=0,
+            total_tokens=120,
+            tokens_per_second=200,
+        )
+        for cb in list(self.handlers):
+            cb(metrics)
+            cb(metrics)  # duplicates (session re-emission) are counted once
+        return stream
+
+
 TURNS = [
     TranscriptTurn(call_id=CALL, speaker=Speaker.AGENT, text="Сайн байна уу?"),
     TranscriptTurn(call_id=CALL, speaker=Speaker.CUSTOMER, text="Захиалгаа шалгах гэсэн юм."),
@@ -914,9 +953,16 @@ async def test_finalizer_emits_call_ended_once() -> None:
     rec.mark_answered()
     rec.turns.extend(TURNS)
     state = CallState(bootstrap=boot)
-    state.callbacks.append(CallbackRequest(when="маргааш 10:00", note="үнийн санал"))
+    due = datetime(2026, 10, 1, 10, 0, tzinfo=ZoneInfo("Asia/Ulaanbaatar"))
+    state.callbacks.append(CallbackRequest(when="маргааш 10:00", note="үнийн санал", due_at=due))
     control = FakeControl()
     model = FakeLLM(['{"summary": "Захиалга шалгав.", "sentiment": "negative", "intent": "x"}'])
+    usage = UsageTracker(rates=CostRates(10, 60, 1000))
+    usage.add(
+        STTMetrics(
+            label="s", request_id="r", timestamp=0, duration=0, audio_duration=30.0, streamed=False
+        )
+    )
     fin = CallFinalizer(
         state=state,
         recorder=rec,
@@ -924,6 +970,7 @@ async def test_finalizer_emits_call_ended_once() -> None:
         control=control,
         model=model,  # type: ignore[arg-type]
         llm_label="google/gemini-2.5-flash",
+        usage=usage,
     )
     clock.t += 42.4
 
@@ -945,7 +992,50 @@ async def test_finalizer_emits_call_ended_once() -> None:
         "llmModelUsed": "google/gemini-2.5-flash",
         "outcome": "",
         "outcomeNote": "",
+        "usage": {
+            "llmTokensIn": 0,
+            "llmTokensOut": 0,
+            "sttSeconds": 30.0,
+            "ttsChars": 0,
+            "llmModel": "google/gemini-2.5-flash",
+            "costMnt": 30,
+        },
+        "callbacks": [{"dueAt": "2026-10-01T02:00:00Z", "note": "үнийн санал"}],
     }
+
+
+async def test_finalizer_counts_analysis_tokens_and_defaults_usage() -> None:
+    sink = FakeSink()
+    boot = make_bootstrap()
+    emitter = EventEmitter(sink, org_id=ORG, call_id=CALL, flush_interval_ms=60_000)
+    rec = CallRecorder(emitter, boot)
+    rec.turns.extend(TURNS)
+    model = MeteredLLM(['{"summary": "S"}'])
+    usage = UsageTracker(rates=CostRates(1000, 0, 0))
+    fin = CallFinalizer(
+        state=CallState(bootstrap=boot),
+        recorder=rec,
+        emitter=emitter,
+        model=model,  # type: ignore[arg-type]
+        llm_label="openai/gpt",
+        usage=usage,
+    )
+    await fin.finalize()
+    ended = sink.of("call.ended")[0].payload
+    assert ended["usage"]["llmTokensIn"] == 100 and ended["usage"]["llmTokensOut"] == 20
+    assert ended["usage"]["llmModel"] == "openai/gpt"
+    assert ended["usage"]["costMnt"] == 120
+    assert "callbacks" not in ended
+    assert model.handlers == []  # the analysis watch is removed again
+
+    # without a tracker the payload still carries a zero usage block
+    sink2 = FakeSink()
+    em2 = EventEmitter(sink2, org_id=ORG, call_id=CALL)
+    fin2 = CallFinalizer(
+        state=CallState(bootstrap=boot), recorder=CallRecorder(em2, boot), emitter=em2
+    )
+    await fin2.finalize()
+    assert sink2.of("call.ended")[0].payload["usage"]["costMnt"] == 0
 
 
 async def test_finalizer_recorded_outcome_wins_over_analysis() -> None:
