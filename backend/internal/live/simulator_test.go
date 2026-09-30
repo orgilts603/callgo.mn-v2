@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -407,4 +406,3 @@ func TestSimulateCallCancelledMidCallIsClosedAsFailed(t *testing.T) {
 	assert.Equal(t, domain.EventCallEnded, evs[len(evs)-1].Type)
 }
 
-var _ = zerolog.Nop

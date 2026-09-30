@@ -25,7 +25,7 @@ func TestResampleSineRoundTrip16k8k16k(t *testing.T) {
 		assert.Greater(t, peak, 1000*goertzelPower(down, 8000, other), "1 kHz vs %v Hz", other)
 	}
 	// Amplitude preserved within 0.1 dB.
-	ratio := math.Sqrt(peak / goertzelPower(x, 16000, freq) * 2) // 16000 vs 8000 samples
+	ratio := math.Sqrt(4 * peak / goertzelPower(x, 16000, freq)) // half as many samples
 	assert.InDelta(t, 1.0, ratio, 0.012)
 
 	up := Resample(down, 8000, 16000)

@@ -8,8 +8,8 @@ import uuid
 from typing import Any
 
 import pytest
-from livekit.agents import llm as lk_llm
 from livekit.agents import APIConnectionError
+from livekit.agents import llm as lk_llm
 from livekit.agents.types import (
     DEFAULT_API_CONNECT_OPTIONS,
     NOT_GIVEN,
