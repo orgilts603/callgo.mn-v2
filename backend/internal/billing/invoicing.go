@@ -443,20 +443,27 @@ func (s *Service) PaymentForOrg(ctx context.Context, orgID, paymentID uuid.UUID)
 // CheckPayment asks the provider for a pending payment's status and settles
 // it when paid (payment, invoice → paid; subscription and org → active).
 func (s *Service) CheckPayment(ctx context.Context, paymentID uuid.UUID) (*domain.Payment, error) {
+	p, _, err := s.checkPayment(ctx, paymentID)
+	return p, err
+}
+
+// checkPayment is CheckPayment that also reports whether this call settled
+// the payment.
+func (s *Service) checkPayment(ctx context.Context, paymentID uuid.UUID) (*domain.Payment, bool, error) {
 	p, err := s.repo.GetPayment(ctx, paymentID)
 	if err != nil {
-		return nil, fmt.Errorf("billing: get payment: %w", err)
+		return nil, false, fmt.Errorf("billing: get payment: %w", err)
 	}
 	if p.Status != domain.PaymentPending {
-		return p, nil
+		return p, false, nil
 	}
 	prov, ok := s.providers[p.Provider]
 	if !ok {
-		return p, ErrUnknownProvider
+		return p, false, ErrUnknownProvider
 	}
 	st, err := prov.Check(ctx, p)
 	if err != nil {
-		return p, fmt.Errorf("billing: %s check: %w: %w", p.Provider, ErrProvider, err)
+		return p, false, fmt.Errorf("billing: %s check: %w: %w", p.Provider, ErrProvider, err)
 	}
 	now := s.now()
 	if st == domain.PaymentPending && p.ExpiresAt != nil && !now.Before(*p.ExpiresAt) {
@@ -465,46 +472,47 @@ func (s *Service) CheckPayment(ctx context.Context, paymentID uuid.UUID) (*domai
 	switch st {
 	case domain.PaymentPaid:
 		if err := s.settle(ctx, p, now); err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		return p, true, nil
 	case domain.PaymentFailed, domain.PaymentExpired:
 		p.Status = st
 		if err := s.repo.UpdatePayment(ctx, p); err != nil {
-			return nil, fmt.Errorf("billing: update payment: %w", err)
+			return nil, false, fmt.Errorf("billing: update payment: %w", err)
 		}
 	}
-	return p, nil
+	return p, false, nil
 }
 
 // HandleCallback processes a provider callback (e.g. QPay's). The callback
 // only identifies the payment; its status is always confirmed with the
-// provider's Check before anything is marked paid.
-func (s *Service) HandleCallback(ctx context.Context, providerName string, query map[string]string, body []byte) (*domain.Payment, error) {
+// provider's Check before anything is marked paid. settled reports whether
+// this callback moved the payment to paid (false for repeats).
+func (s *Service) HandleCallback(ctx context.Context, providerName string, query map[string]string, body []byte) (p *domain.Payment, settled bool, err error) {
 	prov, ok := s.providers[providerName]
 	if !ok {
-		return nil, ErrUnknownProvider
+		return nil, false, ErrUnknownProvider
 	}
 	ref, err := prov.VerifyCallback(ctx, query, body)
 	if err != nil {
-		return nil, fmt.Errorf("billing: %s callback: %w: %w", providerName, domain.ErrInvalid, err)
+		return nil, false, fmt.Errorf("billing: %s callback: %w: %w", providerName, domain.ErrInvalid, err)
 	}
-	var p *domain.Payment
 	if id, perr := uuid.Parse(ref); perr == nil {
 		p, err = s.repo.GetPayment(ctx, id)
 		if err != nil && !errors.Is(err, domain.ErrNotFound) {
-			return nil, fmt.Errorf("billing: get payment: %w", err)
+			return nil, false, fmt.Errorf("billing: get payment: %w", err)
 		}
 	}
 	if p == nil {
 		p, err = s.repo.GetPaymentByProviderRef(ctx, prov.Name(), ref)
 		if err != nil {
-			return nil, fmt.Errorf("billing: payment for callback: %w", err)
+			return nil, false, fmt.Errorf("billing: payment for callback: %w", err)
 		}
 	}
 	if p.Provider != prov.Name() {
-		return nil, fmt.Errorf("billing: payment for callback: %w", domain.ErrNotFound)
+		return nil, false, fmt.Errorf("billing: payment for callback: %w", domain.ErrNotFound)
 	}
-	return s.CheckPayment(ctx, p.ID)
+	return s.checkPayment(ctx, p.ID)
 }
 
 // MarkPaidManually settles an invoice paid outside a provider (bank

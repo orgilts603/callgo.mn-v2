@@ -9,9 +9,10 @@
 #   docker compose -f infra/docker-compose.yml --env-file .env --profile full ps
 #
 # Profiles / Профайлууд:
-#   dev        postgres, redis, livekit, backend (mock telephony), agent, frontend
+#   dev        postgres, redis, minio, livekit, backend (mock telephony), agent, frontend
 #   full       dev + livekit-sip + asterisk  (real PSTN calls; set CALLGO_MOCK_TELEPHONY=false)
-#   recording  livekit egress for call recordings (combine with full)
+#   recording  livekit egress for call recordings (combine with full); the
+#              recordings are uploaded to MinIO/S3 (CALLGO_RECORDINGS_DRIVER=s3)
 #
 # Networking: everything shares the `callgo-net` bridge (172.28.0.0/24).
 # Asterisk (172.28.0.10) and livekit-sip (172.28.0.11) get static IPs because
@@ -49,6 +50,8 @@ networks:
 volumes:
   postgres-data:
   redis-data:
+  # MinIO object store (call recordings, exports).
+  minio-data:
   # LiveKit egress output (/out). Mounted read-only into the frontend nginx,
   # which serves it as /recordings/.
   recordings:
@@ -103,6 +106,54 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
+
+  # ---------------------------------------------------------------------------
+  # MinIO — S3-compatible object store for call recordings. The backend signs
+  # short-lived GET URLs for S3_PUBLIC_URL; LiveKit egress uploads with the
+  # credentials the backend sends in every StartRoomCompositeEgress request.
+  #   API     :9000 (loopback; publish via Caddy/TLS for browsers in prod)
+  #   Console :9001 (loopback; ssh -L 9001:127.0.0.1:9001 to reach it)
+  # ---------------------------------------------------------------------------
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-04-22T22-12-26Z}
+    profiles: [dev, full]
+    <<: [*restart, *logging]
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-callgo-minio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-callgo-minio-secret-change-me}
+      MINIO_REGION: ${S3_REGION:-us-east-1}
+    volumes:
+      - minio-data:/data
+    ports:
+      - "${MINIO_API_PUBLISH:-127.0.0.1:9000}:9000"
+      - "${MINIO_CONSOLE_PUBLISH:-127.0.0.1:9001}:9001"
+    networks: [callgo]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  # One-shot: create the recordings bucket (private) if it does not exist.
+  minio-init:
+    image: ${MINIO_MC_IMAGE:-minio/mc:RELEASE.2025-04-16T18-13-26Z}
+    profiles: [dev, full]
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-callgo-minio}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-callgo-minio-secret-change-me}
+      S3_BUCKET: ${S3_BUCKET:-callgo-recordings}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
+        mc mb --ignore-existing "local/$$S3_BUCKET" &&
+        mc anonymous set none "local/$$S3_BUCKET"
+    networks: [callgo]
+    depends_on:
+      minio:
+        condition: service_healthy
 
   # ---------------------------------------------------------------------------
   # livekit-server — rooms, WebRTC SFU, SIP/agent-dispatch control plane.
@@ -235,8 +286,11 @@ services:
 
   # ---------------------------------------------------------------------------
   # LiveKit egress — audio call recordings (profile "recording").
-  # RecordingURL reaches the backend through the egress_ended webhook; see
-  # infra/egress/egress.yaml and docs/SIP_FLOW.md.
+  # The backend starts an audio-only room-composite egress when a call is
+  # answered and passes the S3 target (S3_* / S3_EGRESS_ENDPOINT, default
+  # http://minio:9000) in the request; with CALLGO_RECORDINGS_DRIVER=local the
+  # file goes to /out/recordings/<key> on the `recordings` volume instead.
+  # The egress_ended webhook marks the recording ready (docs/DEPLOY.md §7).
   # ---------------------------------------------------------------------------
   recordings-init:
     image: ${BUSYBOX_IMAGE:-busybox:1.37-musl}
@@ -255,6 +309,12 @@ services:
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret-callgo-local-only-change-me-0123456789}
       LIVEKIT_WS_URL: ws://livekit:7880
+      # S3 credentials also for egresses started without an explicit target
+      # (e.g. lk-setup room_config.egress with storage.s3 unset). Backend-started
+      # recordings carry their own S3 target and do not need these.
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY:-callgo-minio}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY:-callgo-minio-secret-change-me}
+      AWS_REGION: ${S3_REGION:-us-east-1}
     # Chrome (used only for video/web layouts) needs it; audio-only room
     # composites use the SDK path, but keep egress fully functional.
     cap_add: [SYS_ADMIN]
@@ -269,6 +329,9 @@ services:
         condition: service_healthy
       livekit:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+        required: false
 
   # ---------------------------------------------------------------------------
   # CallGo backend (Go) — REST/WS API, LiveKit webhook, dialer.
@@ -300,17 +363,26 @@ services:
       SIP_ASTERISK_HOST: ${SIP_ASTERISK_HOST:-172.28.0.10}
       SIP_ASTERISK_PORT: ${SIP_ASTERISK_PORT:-5060}
       SIP_ALLOWED_ADDRESSES: ${SIP_ALLOWED_ADDRESSES:-172.28.0.10/32}
+      # Recordings: MinIO on the compose network. S3_PUBLIC_URL (browser
+      # facing, from .env) is what signed URLs point at.
+      S3_ENDPOINT: ${S3_DOCKER_ENDPOINT:-minio:9000}
+      S3_EGRESS_ENDPOINT: ${S3_EGRESS_ENDPOINT:-http://minio:9000}
+      # Local driver: the `recordings` volume egress writes to (/out).
+      CALLGO_RECORDINGS_DIR: /data/recordings
     ports:
       # The public entry point is the frontend nginx; 8080 stays on loopback.
       - "${BACKEND_PUBLISH:-127.0.0.1:8080}:8080"
     volumes:
       - healthcheck-tools:/tools:ro
+      - recordings:/data
     networks: [callgo]
     depends_on:
       healthcheck-tools:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
       livekit:
         condition: service_started
     healthcheck:

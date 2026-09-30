@@ -1557,7 +1557,12 @@ async def run_call(
                     engines["tts"] = f.build_tts(chosen.profile)
             except Exception:
                 log.exception("could not build engines for profile %s", chosen.profile.id)
-        session.update_agent(make_agent(chosen, **engines))
+        try:
+            agent = make_agent(chosen, **engines)
+        except Exception:
+            log.exception("agent for profile %s rejected its engines", chosen.profile.id)
+            agent = make_agent(chosen)
+        session.update_agent(agent)
 
     async def menu_then_agent(route: ResolvedRoute) -> None:
         chosen = boot
@@ -1581,7 +1586,12 @@ async def run_call(
         except Exception:
             log.exception("menu flow failed; continuing with profile %s", boot.profile.id)
             chosen = boot
-        await continue_with(chosen)
+        try:
+            await continue_with(chosen)
+        except Exception:
+            log.exception("could not start the agent after the menu; hanging up")
+            state.set_end_reason("failed")
+            session.shutdown(drain=False)
 
     route = menu_route(boot)
     agent: CallGoAgent = (

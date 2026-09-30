@@ -360,14 +360,11 @@ func (h *billingAPI) getPayment(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, err)
 		return
 	}
-	c := claimsOf(r)
-	before := domain.PaymentStatus("")
-	p, err := svc.PaymentForOrg(r.Context(), c.OrgID, id)
+	p, err := svc.PaymentForOrg(r.Context(), claimsOf(r).OrgID, id)
 	if err != nil {
 		h.fail(w, r, err)
 		return
 	}
-	_ = before
 	writeJSON(w, http.StatusOK, map[string]any{"payment": p})
 }
 
@@ -391,13 +388,13 @@ func (h *billingAPI) webhook(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, r, errInvalid("callback body too large"))
 		return
 	}
-	p, err := svc.HandleCallback(r.Context(), provider, query, body)
+	p, settled, err := svc.HandleCallback(r.Context(), provider, query, body)
 	if err != nil {
 		h.log.Warn().Err(err).Str("provider", provider).Msg("payment callback rejected")
 		h.fail(w, r, err)
 		return
 	}
-	if p.Status == domain.PaymentPaid {
+	if settled {
 		h.audit(r.Context(), p.OrgID, nil, "payment.paid", "payment", p.ID.String(),
 			map[string]any{"provider": p.Provider, "invoiceId": p.InvoiceID, "amountMnt": p.AmountMNT, "via": "callback"})
 	}

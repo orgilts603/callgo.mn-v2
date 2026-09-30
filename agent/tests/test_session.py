@@ -1280,6 +1280,20 @@ class FakeClient(FakeSink):
         self.closed = True
 
 
+class FakeEngine:
+    """STT/TTS stand-in; compares equal to its name (not a ``str``: ``Agent`` would treat a
+    string as a LiveKit inference model id)."""
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __eq__(self, other: object) -> bool:
+        return other == self.name if isinstance(other, str) else other is self
+
+    def __hash__(self) -> int:
+        return hash(self.name)
+
+
 def make_factories(
     model: FakeLLM | None = None,
     fail: bool = False,
@@ -1298,11 +1312,11 @@ def make_factories(
 
     def build_stt(p: AgentProfile) -> Any:
         log.append(f"stt:{p.name}")
-        return "STT"
+        return FakeEngine("STT")
 
     def build_tts(p: AgentProfile) -> Any:
         log.append(f"tts:{p.name}")
-        return "TTS"
+        return FakeEngine("TTS")
 
     return PipelineFactories(
         build_stt=build_stt,
