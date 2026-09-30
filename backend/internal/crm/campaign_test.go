@@ -81,7 +81,7 @@ func TestCampaignLifecycle(t *testing.T) {
 	require.Equal(t, targets[0].ID, claimed[0].ID)
 	for _, tg := range claimed {
 		require.Equal(t, domain.TargetCalling, tg.Status)
-		require.Equal(t, 1, tg.Attempts)
+		require.Equal(t, 0, tg.Attempts) // the campaign engine owns attempt accounting
 	}
 	active, err := s.CountActiveTargets(ctx, c.ID)
 	require.NoError(t, err)
@@ -113,7 +113,8 @@ func TestCampaignLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, claimed)
 
-	// Once due, it is claimable again with attempts incremented.
+	// Once due, it is claimable again; attempts stay as the engine left them.
+	retry.Attempts = 2
 	retry.NextTryAt = ptr(time.Now().Add(-time.Second))
 	require.NoError(t, s.UpdateTarget(ctx, &retry))
 	claimed, err = s.ClaimTargets(ctx, c.ID, 10)

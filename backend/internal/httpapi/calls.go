@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"time"
@@ -353,10 +354,12 @@ func (s *server) runDial(ctx context.Context, callID uuid.UUID, req domain.Outbo
 		if c.Status.IsTerminal() {
 			return
 		}
-		if c.Metadata == nil {
-			c.Metadata = map[string]any{}
+		md := maps.Clone(c.Metadata) // never mutate a map that may be shared
+		if md == nil {
+			md = map[string]any{}
 		}
-		c.Metadata["dialError"] = msg
+		md["dialError"] = msg
+		c.Metadata = md
 		if _, err := s.finalizeCall(ctx, c, callOutcome{Status: domain.StatusFailed, EndReason: "failed"}); err != nil {
 			s.log.Error().Err(err).Str("callId", callID.String()).Msg("dial: finalize failed call")
 		}

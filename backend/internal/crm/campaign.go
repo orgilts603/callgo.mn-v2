@@ -201,7 +201,7 @@ func (s *Store) ListTargets(ctx context.Context, campaignID uuid.UUID, limit, of
 }
 
 // ClaimTargets atomically moves up to n pending, due targets to "calling" and
-// increments their attempts. Concurrent callers never receive the same target
+// leaves Attempts unchanged (the campaign engine owns attempt accounting). Concurrent callers never receive the same target
 // (FOR UPDATE SKIP LOCKED). Results are in upload order.
 func (s *Store) ClaimTargets(ctx context.Context, campaignID uuid.UUID, n int) ([]domain.CampaignTarget, error) {
 	if n <= 0 {
@@ -209,7 +209,7 @@ func (s *Store) ClaimTargets(ctx context.Context, campaignID uuid.UUID, n int) (
 	}
 	rows, err := s.db.Query(ctx,
 		`WITH claimed AS (
-			UPDATE campaign_targets SET status = 'calling', attempts = attempts + 1, updated_at = now()
+			UPDATE campaign_targets SET status = 'calling', updated_at = now()
 			WHERE id IN (
 				SELECT id FROM campaign_targets
 				WHERE campaign_id = $1 AND status = 'pending' AND (next_try_at IS NULL OR next_try_at <= now())

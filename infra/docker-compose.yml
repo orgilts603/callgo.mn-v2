@@ -1,0 +1,372 @@
+# =============================================================================
+# CallGo.mn v2 — Docker Compose stack
+# Бүх үйлчилгээг нэг VPS дээр ажиллуулах docker compose файл
+#
+# Always run it through the wrappers so the repo-root .env is used for
+# ${VARIABLE} interpolation (compose would otherwise look for infra/.env):
+#   make compose-up PROFILE=dev          # or: infra/scripts/dev-up.sh
+#   make compose-up PROFILE=full         # or: infra/scripts/full-up.sh
+#   docker compose -f infra/docker-compose.yml --env-file .env --profile full ps
+#
+# Profiles / Профайлууд:
+#   dev        postgres, redis, livekit, backend (mock telephony), agent, frontend
+#   full       dev + livekit-sip + asterisk  (real PSTN calls; set CALLGO_MOCK_TELEPHONY=false)
+#   recording  livekit egress for call recordings (combine with full)
+#
+# Networking: everything shares the `callgo-net` bridge (172.28.0.0/24).
+# Asterisk (172.28.0.10) and livekit-sip (172.28.0.11) get static IPs because
+# they are referenced by IP in SIP config (identify match, trunk allow-lists,
+# outbound trunk address). Dynamic container IPs come from 172.28.0.128/25 so
+# they can never collide with the static ones.
+# See docs/DEPLOY.md for ports / firewall and docs/SIP_FLOW.md for call flows.
+# =============================================================================
+name: callgo
+
+x-env-file: &env-file
+  env_file:
+    - path: ../.env
+      required: false
+
+x-restart: &restart
+  restart: unless-stopped
+
+x-logging: &logging
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "5"
+
+networks:
+  callgo:
+    name: callgo-net
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+          ip_range: 172.28.0.128/25
+          gateway: 172.28.0.1
+
+volumes:
+  postgres-data:
+  redis-data:
+  # LiveKit egress output (/out). Mounted read-only into the frontend nginx,
+  # which serves it as /recordings/.
+  recordings:
+  asterisk-spool:
+  asterisk-log:
+  # A static busybox used as the healthcheck client of the distroless backend.
+  healthcheck-tools:
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 — CRM database (өгөгдлийн сан)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    profiles: [dev, full]
+    <<: [*restart, *logging]
+    environment:
+      POSTGRES_DB: callgo
+      POSTGRES_USER: callgo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-callgo}
+      TZ: UTC
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    # Published on loopback only, for `make migrate`, psql and host-run dev.
+    ports:
+      - "${POSTGRES_PUBLISH:-127.0.0.1:5432}:5432"
+    networks: [callgo]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U callgo -d callgo"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — LiveKit bus shared by livekit-server, livekit-sip and egress
+  # ---------------------------------------------------------------------------
+  redis:
+    image: ${REDIS_IMAGE:-redis:7.4-alpine}
+    profiles: [dev, full]
+    <<: [*restart, *logging]
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    volumes:
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - redis-data:/data
+    ports:
+      - "${REDIS_PUBLISH:-127.0.0.1:6379}:6379"
+    networks: [callgo]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  # ---------------------------------------------------------------------------
+  # livekit-server — rooms, WebRTC SFU, SIP/agent-dispatch control plane.
+  # Config: infra/livekit/livekit.yaml (template rendered by entrypoint.sh).
+  # ---------------------------------------------------------------------------
+  livekit:
+    image: ${LIVEKIT_SERVER_IMAGE:-livekit/livekit-server:v1.13}
+    profiles: [dev, full]
+    <<: [*restart, *logging]
+    entrypoint: ["/bin/sh", "/etc/livekit/entrypoint.sh"]
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret-callgo-local-only-change-me-0123456789}
+      # Webhooks (room/participant/egress events) -> backend.
+      LIVEKIT_WEBHOOK_URL: ${LIVEKIT_WEBHOOK_URL:-http://backend:8080/api/livekit/webhook}
+      LIVEKIT_REDIS_ADDRESS: redis:6379
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit/livekit.yaml:ro
+      - ./livekit/entrypoint.sh:/etc/livekit/entrypoint.sh:ro
+    ports:
+      # 7880/tcp: HTTP + WebSocket signalling and the server API (lk CLI).
+      #           Keep it on loopback unless external WebRTC clients need it;
+      #           then publish it through TLS (Caddy) — see docs/DEPLOY.md.
+      - "${LIVEKIT_HTTP_PUBLISH:-127.0.0.1:7880}:7880"
+      # 7881/tcp: ICE over TCP fallback.
+      - "7881:7881"
+      # 7882/udp: only used if rtc.udp_port (UDP mux) is enabled in livekit.yaml.
+      - "7882:7882/udp"
+      # 50000-50100/udp: WebRTC media (rtc.port_range_start/end).
+      - "50000-50100:50000-50100/udp"
+    networks: [callgo]
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # livekit-server answers "OK" on / .
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:7880/"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # livekit-sip — SIP <-> LiveKit bridge. Talks only to Asterisk (private
+  # network), so no host networking and no public ports are needed.
+  # With a carrier connected DIRECTLY to livekit-sip you would instead use
+  # network_mode: host + use_external_ip: true (see livekit-sip/config.yaml).
+  # ---------------------------------------------------------------------------
+  livekit-sip:
+    image: ${LIVEKIT_SIP_IMAGE:-livekit/sip:v1.17}
+    profiles: [full]
+    <<: [*restart, *logging]
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret-callgo-local-only-change-me-0123456789}
+      LIVEKIT_WS_URL: ws://livekit:7880
+    volumes:
+      # The image's entrypoint is `livekit-sip --config=/sip/config.yaml`.
+      - ./livekit-sip/config.yaml:/sip/config.yaml:ro
+    networks:
+      callgo:
+        ipv4_address: 172.28.0.11
+    depends_on:
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_healthy
+    healthcheck:
+      # debian-slim image without curl/wget: probe health_port with bash.
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8081"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Asterisk 22 LTS — carrier-facing PBX / SBC. Configs in infra/asterisk are
+  # rendered with .env values by render-config.sh (see docs/ASTERISK.md).
+  # ---------------------------------------------------------------------------
+  asterisk:
+    image: ${ASTERISK_IMAGE:-andrius/asterisk:22.10.1_debian-trixie}
+    profiles: [full]
+    <<: [*restart, *logging]
+    entrypoint: ["/bin/bash", "/etc/asterisk-src/render-config.sh"]
+    # Same as the image's default CMD but less debug noise; -W is replaced by
+    # ASTERISK_TERMINAL_OPTS in the image entrypoint.
+    command: ["/usr/sbin/asterisk", "-f", "-vvv", "-T", "-W", "-U", "asterisk", "-p"]
+    environment:
+      ASTERISK_TERMINAL_OPTS: "-n"
+      # Public IPv4 of the VPS (full-up.sh auto-detects it when empty).
+      SIP_EXTERNAL_IP: ${SIP_EXTERNAL_IP:-}
+      SIP_LOCAL_NET: 172.28.0.0/24
+      LIVEKIT_SIP_HOST: 172.28.0.11
+      LIVEKIT_SIP_PORT: "5060"
+      SIP_AUTH_USERNAME: ${SIP_AUTH_USERNAME:-}
+      SIP_AUTH_PASSWORD: ${SIP_AUTH_PASSWORD:-}
+      CARRIER_HOST: ${CARRIER_HOST:-}
+      CARRIER_PORT: ${CARRIER_PORT:-5060}
+      CARRIER_USERNAME: ${CARRIER_USERNAME:-}
+      CARRIER_PASSWORD: ${CARRIER_PASSWORD:-}
+      CARRIER_REGISTER: ${CARRIER_REGISTER:-no}
+      CARRIER_FROM_USER: ${CARRIER_FROM_USER:-}
+      CARRIER_FROM_DOMAIN: ${CARRIER_FROM_DOMAIN:-}
+      CARRIER_MATCH: ${CARRIER_MATCH:-}
+      CARRIER_DEFAULT_DID: ${CARRIER_DEFAULT_DID:-}
+      CARRIER_DID_SOURCE: ${CARRIER_DID_SOURCE:-ruri}
+      CARRIER_NUMBER_FORMAT: ${CARRIER_NUMBER_FORMAT:-national}
+      ASTERISK_RECORD_CALLS: ${ASTERISK_RECORD_CALLS:-no}
+      TEST_PHONE_PASSWORD: ${TEST_PHONE_PASSWORD:-}
+    volumes:
+      - ./asterisk:/etc/asterisk-src:ro
+      - asterisk-spool:/var/spool/asterisk
+      - asterisk-log:/var/log/asterisk
+    ports:
+      # SIP signalling from the carrier (restrict to carrier IPs, docs/DEPLOY.md).
+      - "5060:5060/udp"
+      # RTP media, must match infra/asterisk/rtp.conf.
+      - "10000-10200:10000-10200/udp"
+    networks:
+      callgo:
+        ipv4_address: 172.28.0.10
+    depends_on:
+      livekit-sip:
+        condition: service_started
+    # The image ships its own HEALTHCHECK (/usr/local/bin/healthcheck.sh).
+
+  # ---------------------------------------------------------------------------
+  # LiveKit egress — audio call recordings (profile "recording").
+  # RecordingURL reaches the backend through the egress_ended webhook; see
+  # infra/egress/egress.yaml and docs/SIP_FLOW.md.
+  # ---------------------------------------------------------------------------
+  recordings-init:
+    image: ${BUSYBOX_IMAGE:-busybox:1.37-musl}
+    profiles: [recording]
+    # egress runs as a non-root user; make the shared volume writable.
+    command: ["sh", "-c", "mkdir -p /out/recordings && chmod -R 0777 /out"]
+    volumes:
+      - recordings:/out
+
+  egress:
+    image: ${LIVEKIT_EGRESS_IMAGE:-livekit/egress:v1.14}
+    profiles: [recording]
+    <<: [*restart, *logging]
+    environment:
+      EGRESS_CONFIG_FILE: /etc/egress/egress.yaml
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret-callgo-local-only-change-me-0123456789}
+      LIVEKIT_WS_URL: ws://livekit:7880
+    # Chrome (used only for video/web layouts) needs it; audio-only room
+    # composites use the SDK path, but keep egress fully functional.
+    cap_add: [SYS_ADMIN]
+    volumes:
+      - ./egress/egress.yaml:/etc/egress/egress.yaml:ro
+      - recordings:/out
+    networks: [callgo]
+    depends_on:
+      recordings-init:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      livekit:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # CallGo backend (Go) — REST/WS API, LiveKit webhook, dialer.
+  # Image built from backend/Dockerfile (distroless, no shell): its
+  # healthcheck uses a static busybox copied in by `healthcheck-tools`.
+  # ---------------------------------------------------------------------------
+  healthcheck-tools:
+    image: ${BUSYBOX_IMAGE:-busybox:1.37-musl}
+    profiles: [dev, full]
+    command: ["cp", "/bin/busybox", "/tools/busybox"]
+    volumes:
+      - healthcheck-tools:/tools
+
+  backend:
+    build:
+      context: ../backend
+    image: callgo/backend:${CALLGO_VERSION:-dev}
+    profiles: [dev, full]
+    <<: [*env-file, *restart, *logging]
+    environment:
+      # Container-network addresses override the host-oriented .env values.
+      CALLGO_DATABASE_URL: postgres://callgo:${POSTGRES_PASSWORD:-callgo}@postgres:5432/callgo?sslmode=disable
+      CALLGO_HTTP_ADDR: ":8080"
+      CALLGO_AGENT_WORKER_URL: http://agent:8090
+      CALLGO_MOCK_TELEPHONY: ${CALLGO_MOCK_TELEPHONY:-true}
+      LIVEKIT_URL: http://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret-callgo-local-only-change-me-0123456789}
+      SIP_ASTERISK_HOST: ${SIP_ASTERISK_HOST:-172.28.0.10}
+      SIP_ASTERISK_PORT: ${SIP_ASTERISK_PORT:-5060}
+      SIP_ALLOWED_ADDRESSES: ${SIP_ALLOWED_ADDRESSES:-172.28.0.10/32}
+    ports:
+      # The public entry point is the frontend nginx; 8080 stays on loopback.
+      - "${BACKEND_PUBLISH:-127.0.0.1:8080}:8080"
+    volumes:
+      - healthcheck-tools:/tools:ro
+    networks: [callgo]
+    depends_on:
+      healthcheck-tools:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "/tools/busybox", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+
+  # ---------------------------------------------------------------------------
+  # CallGo agent worker (Python, livekit-agents): STT -> LLM -> TTS.
+  # Models live in agent/models (bind mount): run `make models` first so the
+  # first call does not wait for a multi-GB Whisper download.
+  #   /models/hf     Hugging Face cache (faster-whisper, turn detector)
+  #   /models/piper  Piper voices (*.onnx + *.onnx.json)
+  # The image runs as uid 10001: the directory must be writable by it
+  # (dev-up.sh / full-up.sh / download-models.sh take care of that).
+  # Scale out with: docker compose ... up -d --scale agent=3
+  # GPU: add -f infra/docker-compose.gpu.yml.
+  # ---------------------------------------------------------------------------
+  agent:
+    build:
+      context: ../agent
+    image: callgo/agent:${CALLGO_VERSION:-dev}
+    profiles: [dev, full]
+    <<: [*env-file, *restart, *logging]
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-devkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-devsecret-callgo-local-only-change-me-0123456789}
+      CALLGO_BACKEND_URL: http://backend:8080
+      CALLGO_HTTP_PORT: "8090"
+      CALLGO_PIPER_VOICES_DIR: /models/piper
+      HF_HOME: /models/hf
+    volumes:
+      - ${CALLGO_MODELS_DIR:-../agent/models}:/models
+    networks: [callgo]
+    depends_on:
+      backend:
+        condition: service_healthy
+      livekit:
+        condition: service_healthy
+    # The image defines its own HEALTHCHECK on :8090/health.
+
+  # ---------------------------------------------------------------------------
+  # Frontend — React build served by nginx; proxies /api (incl. the /api/ws
+  # WebSocket) to the backend. Put Caddy/TLS in front (infra/caddy/Caddyfile).
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ../frontend
+    image: callgo/frontend:${CALLGO_VERSION:-dev}
+    profiles: [dev, full]
+    <<: [*restart, *logging]
+    ports:
+      - "${FRONTEND_PUBLISH:-8088}:80"
+    volumes:
+      # LiveKit egress local recordings, served read-only at /recordings/.
+      - recordings:/srv/callgo-out:ro
+    networks: [callgo]
+    depends_on:
+      backend:
+        condition: service_healthy
